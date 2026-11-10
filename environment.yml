@@ -1,0 +1,15 @@
+name: chipseq_align
+channels:
+  - conda-forge
+  - bioconda
+  - defaults
+dependencies:
+  - python=3.11
+  - bowtie2=2.5.5
+  - samtools=1.25
+  - curl=8.23.0
+  - deeptools=3.5.5
+  - r-base
+  - bioconductor-genomicalignments
+  - bioconductor-genomicranges
+  - bioconductor-rtracklayer

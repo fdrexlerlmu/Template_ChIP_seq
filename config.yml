@@ -1,0 +1,11 @@
+# Pfade und Metadaten
+metadata: "Metadata.txt"
+raw_dir: "rawdata"
+ref_dir: "ref"
+results_dir: "results"
+
+# Referenzgenom (Drosophila melanogaster release-110 / dm6)
+genome:
+  url: "https://ftp.ensembl.org/pub/release-110/fasta/drosophila_melanogaster/dna/Drosophila_melanogaster.BDGP6.46.dna.toplevel.fa.gz"
+  fa: "ref/genome.fa.gz"
+  index_prefix: "ref/bt2_index"

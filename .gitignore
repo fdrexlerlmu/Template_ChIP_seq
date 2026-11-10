@@ -1,0 +1,12 @@
+# Rohdaten und Ergebnisse nicht hochladen
+rawdata/
+results/
+logs/
+
+# R-Bibliothek (wird über renv.lock wiederhergestellt)
+renv/library/
+renv/staging/
+
+# Systemdateien
+.DS_Store
+*.Rproj.user

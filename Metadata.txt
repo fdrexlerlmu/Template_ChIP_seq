@@ -1,0 +1,6 @@
+Sample_ID	Target	Sample_Type	Input_Sample_ID	Genotype	Condition	Bio_Replicate	Tissue	Antibody	Fragment_Length	Seq_Mode
+CrebAChIP_Fast_4h_rep1										
+CrebAChIP_Fast_4h_rep2										
+Input_Fast_4h										
+Pol2ChIP_Fast_4h_rep1										
+Pol2ChIP_Fast_4h_rep2										
