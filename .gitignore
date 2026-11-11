@@ -2,6 +2,7 @@
 rawdata/
 results/
 logs/
+.snakemake/
 
 # R-Bibliothek (wird über renv.lock wiederhergestellt)
 renv/library/
