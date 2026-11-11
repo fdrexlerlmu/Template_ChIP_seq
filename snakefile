@@ -38,7 +38,7 @@ else:
 metadata.set_index("Sample_ID", drop=False, inplace=True)
 SAMPLES = metadata["Sample_ID"].tolist()
 
-# 3. HILFSFUNKTIONEN (MÜSSEN IMMER VOR DEN REGELN STEHEN!)
+# 3. HILFSFUNKTIONEN
 
 def get_fastq_inputs(wildcards):
     sample_id = wildcards.sample
@@ -69,7 +69,6 @@ def get_control_bam(wildcards):
             return f"results/bam/{control_id}.sorted.bam"
     raise ValueError(f"Keine gültige Input_Sample für Probe {sample_id} in Metadata.txt gefunden.")
 
-# Liste aller Peak-Dateien für die jeweilige Gruppe
 def get_group_peaks(wildcards):
     group_samples = chip_metadata[chip_metadata["Consensus_Group"] == wildcards.group]["Sample_ID"].tolist()
     return [f"results/peaks/narrowPeak/{sample}_peaks.narrowPeak" for sample in group_samples]
@@ -77,7 +76,6 @@ def get_group_peaks(wildcards):
 # 4. REGELN & DYNAMISCHE GRUPPEN
 chip_metadata = metadata[metadata["Sample_Type"].str.upper() == "CHIP"].copy()
 
-# Baut den Gruppennamen automatisch aus Target, Condition und (falls vorhanden) formatiertem Timepoint zusammen
 time_suffix = "_" + chip_metadata["Timepoint"].astype(str).str.replace(r'h$', '', case=False, regex=True) + "h" if "Timepoint" in chip_metadata.columns else ""
 chip_metadata["Consensus_Group"] = chip_metadata["Target"].astype(str) + "_" + chip_metadata["Condition"].astype(str) + time_suffix
 
@@ -92,7 +90,6 @@ rule all:
         expand("results/peaks/consensus/bed/{group}_consensus.bed", group=CONSENSUS_GROUPS),
         expand("results/annotation/{group}_annotated_peaks.csv", group=CONSENSUS_GROUPS),
         expand("results/annotation/plots/{group}_anno_bar.pdf", group=CONSENSUS_GROUPS),
-        expand("results/annotation/plots/{group}_dist_to_tss.pdf", group=CONSENSUS_GROUPS),
         expand("results/annotation/plots/{group}_dist_to_tss.pdf", group=CONSENSUS_GROUPS),
         # Universelle DiffBind Ausgaben
         "results/diffbind/differential_peaks.csv",
@@ -145,7 +142,7 @@ rule r_coverage_export:
     script:
         "scripts/calculate_coverage.R"
 
-# 7. MACS2 Peak Calling für Drosophila (dm6) mit sortierten Unterordnern
+# 7. MACS2 Peak Calling für Drosophila (dm6)
 rule macs2_callpeak:
     input:
         treatment = "results/bam/{sample}.sorted.bam",
@@ -184,32 +181,7 @@ rule macs2_callpeak:
         rm -rf {params.tmp_outdir}
         """
 
-# 8. KonsensPeaks 
-rule make_consensus:
-    input:
-        get_group_peaks
-    output:
-        rds = "results/peaks/consensus/rds/{group}_consensus.rds",
-        bed = "results/peaks/consensus/bed/{group}_consensus.bed"
-    log:
-        "logs/consensus/{group}.log"
-    script:
-        "scripts/make_consensus.R"
-
-# 9. ChIPseeker Genom-Annotation und Visualisierung
-rule chipseeker_annotation:
-    input:
-        rds = "results/peaks/consensus/rds/{group}_consensus.rds"
-    output:
-        csv = "results/annotation/{group}_annotated_peaks.csv",
-        bar_pdf = "results/annotation/plots/{group}_anno_bar.pdf",
-        tss_pdf = "results/annotation/plots/{group}_dist_to_tss.pdf"
-    log:
-        "logs/annotation/{group}.log"
-    script:
-        "scripts/run_chipseeker.R"
-
-# 10. Differential Binding Analyse mit DiffBind (universell & korrigiert)
+# 8. Differential Binding Analyse mit DiffBind
 rule run_diffbind:
     input:
         bams = expand("results/bam/{sample}.sorted.bam", sample=CHIP_SAMPLES),
@@ -239,11 +211,7 @@ rule run_diffbind:
 
         db <- dba(sampleSheet = samples)
         db <- dba.count(db)
-        
-        # minMembers = 2 Replikate
         db <- dba.contrast(db, minMembers = 2)
-        
-        # dba.analyze braucht jetzt kein minMembers mehr
         db <- dba.analyze(db)
 
         res_table <- dba.report(db, th = 1)
@@ -252,5 +220,4 @@ rule run_diffbind:
         pdf("{output.pca}"); dba.plotPCA(db, label = DBA_ID); dev.off()
         pdf("{output.ma}");  dba.plotMA(db); dev.off()
         """
-        
         shell(f"Rscript -e '{r_code}' > {log} 2>&1")
