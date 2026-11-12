@@ -1,3 +1,0 @@
-NameError in file "/Users/re57roc/Documents/Computational/TestProjekt/Snakefile", line 6:
-name 'get_fastq_inputs' is not defined
-  File "/Users/re57roc/Documents/Computational/TestProjekt/Snakefile", line 6, in <module>

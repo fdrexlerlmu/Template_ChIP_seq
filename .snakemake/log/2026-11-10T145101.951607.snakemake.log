@@ -1,2 +1,0 @@
-WorkflowError in file "/Users/re57roc/Documents/Computational/TestProjekt/Snakefile", line 5:
-Workflow defines configfile config.yaml but it is not present or accessible (full checked path: /Users/re57roc/Documents/Computational/TestProjekt/config.yaml).
