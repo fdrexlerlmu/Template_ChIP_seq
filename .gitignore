@@ -4,10 +4,15 @@ results/
 logs/
 .snakemake/
 
-# R-Bibliothek (wird über renv.lock wiederhergestellt)
+# R-Bibliothek & temporäre Files (wird über renv.lock wiederhergestellt)
 renv/library/
+renv/python/
 renv/staging/
+.Rhistory
+.RData
+.RDataTmp
 
-# Systemdateien
+# System- und Editor-Dateien
 .DS_Store
 *.Rproj.user
+*.Ruser
