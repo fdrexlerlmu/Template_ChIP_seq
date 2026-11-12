@@ -1,0 +1,212 @@
+---
+title: "ChIP-seq Downstream Analysis Report"
+author: "Fabian"
+date: today
+format:
+  html:
+    toc: true
+    toc-depth: 3
+    toc-location: left
+    code-fold: true
+    embed-resources: true
+    theme: cosmo
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(
+  echo = FALSE,
+  warning = FALSE,
+  message = FALSE,
+  fig.path = "results/plots/"
+)
+
+suppressPackageStartupMessages({
+  library(tidyverse)
+  library(ggrepel)
+  library(ggvenn)
+  library(ChIPseeker)
+})
+```
+
+## 1. Experimentelles Set-up
+
+Übersicht der ausgewerteten ChIP-seq Proben aus der primären Analyse.
+
+```{r metadata}
+if (file.exists("../Metadata.txt")) {
+  metadata <- read.delim("../Metadata.txt")
+  knitr::kable(metadata, caption = "Proben-Metadaten")
+} else {
+  cat("Hinweis: Metadata.txt im Root-Verzeichnis nicht gefunden.")
+}
+```
+
+---
+
+## 2. Peak Annotation & Genomische Verteilung
+
+Verteilung der identifizierten Peaks relativ zu genomischen Features (Promotoren, Exons, Introns, intergenische Regionen) basierend auf der Annotation gegen Drosophila melanogaster (dm6).
+
+```{r annotation-plot, fig.width=8, fig.height=4.5}
+anno_rds <- "results/annotation/peakAnno.rds"
+
+if (file.exists(anno_rds)) {
+  peakAnno <- readRDS(anno_rds)
+  plotAnnoBar(peakAnno)
+} else {
+  cat("Annotation-Datei (peakAnno.rds) wurde nicht gefunden.")
+}
+```
+
+---
+
+## 3. Differentielles Binde-Verhalten (Volcano Plot)
+
+Darstellung der differentiell gebundenen Regionen zwischen den Versuchsbedingungen. Signifikante Peaks mit FDR < 0.05 und |Fold| > 1 sind hervorgehoben und mit den Top-Genen beschriftet.
+
+```{r volcano-plot, fig.width=7.5, fig.height=5.5}
+volcano_rds <- "results/plots/volcano_data.rds"
+
+if (file.exists(volcano_rds)) {
+  volcano_df <- readRDS(volcano_rds)
+  
+  # log2FoldChange statt Fold / padj statt FDR
+  ggplot(volcano_df, aes(x = log2FoldChange, y = -log10(padj), color = Significance)) +
+    geom_point(alpha = 0.6, size = 1.5) +
+    scale_color_manual(
+      values = c("Down" = "#2b5c8f", "Not Sig" = "grey70", "Up" = "#d95f02")
+    ) +
+    theme_minimal() +
+    geom_vline(xintercept = c(-1, 1), linetype = "dashed", color = "grey40") +
+    geom_hline(yintercept = -log10(0.05), linetype = "dashed", color = "grey40") +
+    labs(
+      title = "Volcano Plot der differentiellen Peaks",
+      x = "Log2 Fold Change",
+      y = "-Log10 padj",
+      color = "Status"
+    ) +
+    geom_text_repel(
+      data = head(volcano_df %>% filter(Significance != "Not Sig") %>% arrange(padj), 12),
+      aes(label = SYMBOL),
+      size = 3.2,
+      max.overlaps = 15
+    )
+} else {
+  cat("Volcano-Datensatz (volcano_data.rds) wurde nicht gefunden.")
+}
+```
+
+---
+
+## 4. Zielgen-Überlappung (Venn-Diagramm)
+
+Schnittmenge der differentiell regulierten Zielgene (erhöhte vs. verringerte Bindung).
+
+```{r venn-plot, fig.width=6, fig.height=4.5}
+venn_rds <- "results/plots/gene_lists.rds"
+
+if (file.exists(venn_rds)) {
+  gene_lists <- readRDS(venn_rds)
+  
+  # Kurze Zusammenfassung im Text vor dem Plot
+  cat(sprintf("Gefundene Zielgene: %d Upregulated, %d Downregulated\n\n", 
+              length(gene_lists$Upregulated), 
+              length(gene_lists$Downregulated)))
+  
+  ggvenn(
+    gene_lists, 
+    fill_color = c("#d95f02", "#2b5c8f"),
+    stroke_size = 0.5,
+    set_name_size = 4,
+    text_size = 3.5
+  )
+} else {
+  cat("Venn-Datensatz (gene_lists.rds) wurde nicht gefunden.")
+}
+```
+---
+
+## 5. Motif-Analyse
+
+Übersicht der angereicherten Sequenzmotive in den differentiellen Peak-Regionen.
+
+```{r motif-summary}
+streme_rds <- "results/motifs/streme_up.rds"
+
+if (file.exists(streme_rds)) {
+  streme_res <- readRDS(streme_rds)
+  
+  motif_df <- as_tibble(streme_res)
+  
+  # Spaltenzuordnung mit numerischer Typisierung für pval / evalue
+  motif_table <- motif_df %>%
+    mutate(
+      PValue = if ("pval" %in% colnames(.)) as.numeric(pval) 
+               else if ("log_pval" %in% colnames(.)) exp(as.numeric(log_pval)) 
+               else NA_real_,
+      EValue = if ("evalue" %in% colnames(.)) as.numeric(evalue) else NA_real_
+    ) %>%
+    select(
+      any_of(c(
+        "Motif-ID"  = "name",
+        "Consensus" = "consensus",
+        "P-Value"   = "PValue",
+        "E-Value"   = "EValue",
+        "Sites"     = "pos_count"
+      ))
+    ) %>%
+    head(5)
+  
+  knitr::kable(motif_table, caption = "Top angereicherte Motive (STREME)", digits = 4)
+} else {
+  cat("Keine Motivergebnisse gefunden oder STREME-Analyse übersprungen.")
+}
+```
+
+---
+
+## 6. Funktionelle Anreicherung & Biologische Prozesse (GO & KEGG)
+
+Anreicherung biologischer Prozesse (Gene Ontology) und Pathways für die durch CrebA differentiell gebundenen Zielgene.
+
+### 6.1 Top Biologische Prozesse (GO: Biological Process)
+
+```{r go-bp-plot, fig.width=8, fig.height=5.5}
+go_bp_rds <- "results/plots/enrich_go_bp.rds"
+
+if (file.exists(go_bp_rds)) {
+  ego_bp <- readRDS(go_bp_rds)
+  
+  if (!is.null(ego_bp) && nrow(as.data.frame(ego_bp)) > 0) {
+    clusterProfiler::dotplot(ego_bp, showCategory = 12) +
+      ggplot2::labs(title = "Top angereicherte biologische Prozesse (GO: BP)") +
+      ggplot2::theme_minimal()
+  } else {
+    cat("Keine signifikanten GO BP Terme (p.adjust < 0.05) gefunden.")
+  }
+} else {
+  cat("GO-BP Datensatz (enrich_go_bp.rds) nicht gefunden.")
+}
+```
+
+### 6.2 Zelluläre Lokalisierung der Zielgene (GO: Cellular Component)
+
+Zeigt, ob Zielgene in spezifischen Zellstrukturen (z. B. Endoplasmatisches Retikulum, Golgi-Apparat) angereichert sind.
+Code-Snippet
+
+```{r go-cc-plot, fig.width=8, fig.height=5}
+go_cc_rds <- "results/plots/enrich_go_cc.rds"
+
+if (file.exists(go_cc_rds)) {
+  ego_cc <- readRDS(go_cc_rds)
+  
+  if (!is.null(ego_cc) && nrow(as.data.frame(ego_cc)) > 0) {
+    clusterProfiler::barplot(ego_cc, showCategory = 10) +
+      ggplot2::labs(title = "Angereicherte zelluläre Komponenten (GO: CC)") +
+      ggplot2::theme_minimal()
+  } else {
+    cat("Keine signifikanten GO CC Terme (p.adjust < 0.05) gefunden.")
+  }
+} else {
+  cat("GO-CC Datensatz (enrich_go_cc.rds) nicht gefunden.")
+}
