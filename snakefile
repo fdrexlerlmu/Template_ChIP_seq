@@ -4,7 +4,7 @@ import os
 # 1. Konfiguration laden
 configfile: "config.yml"
 
-# 2. Metadaten einlesen & säubern
+# 2. Metadaten einlesen & säubern (OHNE Index-Setzung, um flexibel nach Run_ID & Sample_ID zu filtern)
 metadata_path = config.get("metadata", "Metadata.txt")
 metadata = pd.read_csv(metadata_path, sep="\t").dropna(how="all")
 metadata.columns = metadata.columns.str.strip()
@@ -12,103 +12,113 @@ metadata.columns = metadata.columns.str.strip()
 # Flexibler Check für Seq_Mode
 mode_col = None
 for col in metadata.columns:
-    if col.lower().replace("_", "") == "seqmode":
+    clean_col = col.lower().replace("_", "").replace("-", "")
+    if clean_col == "seqmode":
         mode_col = col
         break
 
 if mode_col is None:
-    raise KeyError(
-        f"[ERROR] Spalte 'Seq_Mode' nicht in {metadata_path} gefunden! "
-        f"Vorhandene Spalten sind: {list(metadata.columns)}"
-    )
+    raise KeyError(f"[ERROR] Spalte 'Seq_Mode' nicht in {metadata_path} gefunden!")
 
 metadata.rename(columns={mode_col: "Seq_Mode"}, inplace=True)
 
-metadata["Sample_ID"] = metadata["Sample_ID"].astype(str).str.strip()
-metadata["Sample_ID"] = metadata["Sample_ID"].str.replace(r"\.(fastq|txt)(\.gz)?$", "", regex=True)
-metadata["Seq_Mode"] = metadata["Seq_Mode"].astype(str).str.strip().str.upper()
+# Säubern aller Text-Spalten
+for col in ["Run_ID", "Sample_ID", "Seq_Mode", "Sample_Type", "Input_Sample_ID"]:
+    if col in metadata.columns:
+        metadata[col] = metadata[col].astype(str).str.strip()
 
-# Filtere nur ChIP-Proben für das Peak-Calling heraus
-if "Sample_Type" in metadata.columns:
-    metadata["Sample_Type"] = metadata["Sample_Type"].astype(str).str.strip()
-    CHIP_SAMPLES = metadata[metadata["Sample_Type"].str.upper() == "CHIP"]["Sample_ID"].tolist()
-else:
-    CHIP_SAMPLES = metadata["Sample_ID"].tolist()
+metadata["Seq_Mode"] = metadata["Seq_Mode"].str.upper()
 
-metadata.set_index("Sample_ID", drop=False, inplace=True)
-SAMPLES = metadata["Sample_ID"].tolist()
+# 1. Eindeutige Liste aller technischen Läufe (Run_IDs) für Rule 5a
+RUN_IDS = metadata["Run_ID"].unique().tolist()
+
+# 2. Eindeutige Liste aller biologischen Proben (Sample_IDs) für Rule 5b, Coverage, etc.
+SAMPLES = metadata["Sample_ID"].unique().tolist()
+
+# 3. Eindeutige Liste aller ChIP-Proben (biologisch) für Peak Calling & DiffBind
+chip_metadata = metadata[metadata["Sample_Type"].str.upper() == "CHIP"].copy()
+CHIP_SAMPLES = chip_metadata["Sample_ID"].unique().tolist()
+
 
 # 3. HILFSFUNKTIONEN
 
 def get_fastq_inputs(wildcards):
-    sample_id = wildcards.sample
-    mode = metadata.loc[sample_id, "Seq_Mode"]
+    """Sucht die passenden FASTQ/TXT-Dateien basierend auf der Run_ID in rawdata/."""
+    run_id = wildcards.run_id
+    # Mode anhand der Run_ID aus dem DataFrame ermitteln
+    mode_series = metadata.loc[metadata["Run_ID"] == run_id, "Seq_Mode"]
+    if mode_series.empty:
+        raise KeyError(f"Run_ID '{run_id}' nicht in Metadata.txt gefunden!")
+    mode = mode_series.values[0]
+
     raw_dir = config.get("raw_dir", "rawdata")
+    exts = ["fastq.gz", "fq.gz", "txt.gz"]
     
     if mode == "PE":
-        for ext in ["txt.gz", "fastq.gz"]:
-            r1, r2 = f"{raw_dir}/{sample_id}_R1.{ext}", f"{raw_dir}/{sample_id}_R2.{ext}"
-            if os.path.exists(r1) and os.path.exists(r2):
-                return {"r1": r1, "r2": r2}
-            r1_alt, r2_alt = f"{raw_dir}/{sample_id}_1.{ext}", f"{raw_dir}/{sample_id}_2.{ext}"
-            if os.path.exists(r1_alt) and os.path.exists(r2_alt):
-                return {"r1": r1_alt, "r2": r2_alt}
-        raise FileNotFoundError(f"Keine Paired-End Dateien für {sample_id} in {raw_dir}/ gefunden.")
+        patterns = [
+            ("", ""),
+            ("_R1", "_R2"),
+            ("_R1_001", "_R2_001"),
+            ("_1", "_2")
+        ]
+        for p1, p2 in patterns:
+            for ext in exts:
+                r1 = f"{raw_dir}/{run_id}{p1}.{ext}"
+                r2 = f"{raw_dir}/{run_id}{p2}.{ext}"
+                if os.path.exists(r1) and os.path.exists(r2):
+                    return {"r1": r1, "r2": r2}
+        raise FileNotFoundError(f"Keine Paired-End Dateien für Run_ID '{run_id}' in '{raw_dir}/' gefunden.")
     else:
-        for ext in ["txt.gz", "fastq.gz"]:
-            f = f"{raw_dir}/{sample_id}.{ext}"
-            if os.path.exists(f):
-                return {"r1": f}
-        raise FileNotFoundError(f"Keine Single-End Datei für {sample_id} in {raw_dir}/ gefunden.")
+        patterns = ["", "_R1", "_R1_001", "_1"]
+        for p in patterns:
+            for ext in exts:
+                f = f"{raw_dir}/{run_id}{p}.{ext}"
+                if os.path.exists(f):
+                    return {"r1": f}
+        raise FileNotFoundError(f"Keine Single-End Datei für Run_ID '{run_id}' in '{raw_dir}/' gefunden.")
 
 def get_control_bam(wildcards):
+    """Findet das zugehörige gemergte Input-BAM laut Metadata.txt."""
     sample_id = wildcards.sample
-    if "Input_Sample" in metadata.columns:
-        control_id = metadata.loc[sample_id, "Input_Sample"]
-        if pd.notna(control_id) and str(control_id).strip() != "" and str(control_id).upper() != "NAN":
-            return f"results/bam/{control_id}.sorted.bam"
-    raise ValueError(f"Keine gültige Input_Sample für Probe {sample_id} in Metadata.txt gefunden.")
+    input_series = metadata.loc[metadata["Sample_ID"] == sample_id, "Input_Sample_ID"]
+    if input_series.empty:
+        raise KeyError(f"Sample_ID '{sample_id}' nicht in Metadata.txt gefunden!")
+    input_id = input_series.values[0]
+    return f"results/bam/{input_id}.sorted.bam"
 
-def get_group_peaks(wildcards):
-    group_samples = chip_metadata[chip_metadata["Consensus_Group"] == wildcards.group]["Sample_ID"].tolist()
-    return [f"results/peaks/narrowPeak/{sample}_peaks.narrowPeak" for sample in group_samples]
 
-# 4. REGELN & DYNAMISCHE GRUPPEN
-chip_metadata = metadata[metadata["Sample_Type"].str.upper() == "CHIP"].copy()
-
-time_suffix = "_" + chip_metadata["Timepoint"].astype(str).str.replace(r'h$', '', case=False, regex=True) + "h" if "Timepoint" in chip_metadata.columns else ""
-chip_metadata["Consensus_Group"] = chip_metadata["Target"].astype(str) + "_" + chip_metadata["Condition"].astype(str) + time_suffix
-
-CONSENSUS_GROUPS = chip_metadata["Consensus_Group"].unique().tolist()
-
+# 4. TARGET ALL RULE
 rule all:
     input:
+        # Final gemergte BAMs und BAIs (biologische Replikate)
+        expand("results/bam/{sample}.sorted.bam", sample=SAMPLES),
+        expand("results/bam/{sample}.sorted.bam.bai", sample=SAMPLES),
+        
+        # BigWig & GRanges Export
         expand("results/bigwig/{sample}.bw", sample=SAMPLES),
         expand("results/rds/{sample}_granges.rds", sample=SAMPLES),
+        
+        # MACS2 Peaks pro ChIP-Probe
         expand("results/peaks/narrowPeak/{sample}_peaks.narrowPeak", sample=CHIP_SAMPLES),
-        expand("results/peaks/consensus/rds/{group}_consensus.rds", group=CONSENSUS_GROUPS),
-        expand("results/peaks/consensus/bed/{group}_consensus.bed", group=CONSENSUS_GROUPS),
-        expand("results/annotation/{group}_annotated_peaks.csv", group=CONSENSUS_GROUPS),
-        expand("results/annotation/plots/{group}_anno_bar.pdf", group=CONSENSUS_GROUPS),
-        expand("results/annotation/plots/{group}_dist_to_tss.pdf", group=CONSENSUS_GROUPS),
-        # Universelle DiffBind Ausgaben
+        
+        # Differential Analysis Ausgaben
         "results/diffbind/differential_peaks.csv",
         "results/diffbind/plots/pca_plot.pdf",
         "results/diffbind/plots/ma_plot.pdf"
 
-# 5. Alignment & BAM-Sortierung (Bowtie2 + Samtools, MAPQ >= 20)
-rule align_and_sort:
+
+# 5a. Einzelne Technische Replikate alignen (landen strikt in results/bam/raw/)
+rule align_tech_replicate:
     input:
-        unpack(get_fastq_inputs)
+        unpack(get_fastq_inputs)  # Nimmt wildcards.run_id
     output:
-        bam = "results/bam/{sample}.sorted.bam",
-        bai = "results/bam/{sample}.sorted.bam.bai"
+        bam = temp("results/bam/raw/{run_id}.sorted.bam")
     params:
-        prefix = config["genome"]["index_prefix"],
-        mode = lambda wildcards: metadata.loc[wildcards.sample, "Seq_Mode"]
+        prefix = config.get("genome", {}).get("index_prefix", "genome/bowtie2/dm6") if isinstance(config.get("genome"), dict) else config.get("bowtie2_index", "genome/bowtie2/dm6"),
+        mode   = lambda wildcards: metadata.loc[metadata["Run_ID"] == wildcards.run_id, "Seq_Mode"].values[0]
     threads: 6
     log:
-        "logs/align/{sample}.log"
+        "logs/align/{run_id}.log"
     run:
         if params.mode == "PE":
             shell(
@@ -122,41 +132,66 @@ rule align_and_sort:
                 "samtools view -bS -q 20 - | "
                 "samtools sort -@ 2 -m 1G -o {output.bam} -"
             )
-        shell(
-            "samtools index {output.bam}"
-        )
 
-# 6. R-Coverage calculation & GRanges Export
+
+# 5b. Technische Replikate pro biologischer Sample_ID zusammenführen (landen in results/bam/)
+rule merge_tech_replicates:
+    input:
+        bams = lambda wildcards: [
+            f"results/bam/raw/{run_id}.sorted.bam" 
+            for run_id in metadata[metadata["Sample_ID"] == wildcards.sample]["Run_ID"]
+        ]
+    output:
+        bam = "results/bam/{sample,\w+}.sorted.bam",
+        bai = "results/bam/{sample,\w+}.sorted.bam.bai"
+    threads: 4
+    log:
+        "logs/merge/{sample}.log"
+    run:
+        if not input.bams:
+            raise ValueError(f"Keine Matching Run_IDs für Sample '{wildcards.sample}' in Metadata.txt gefunden!")
+
+        # Falls nur 1 technisches Replikat existiert (_t1), direkt kopieren
+        if len(input.bams) == 1:
+            shell("cp {input.bams[0]} {output.bam}")
+        else:
+            bams_str = " ".join(input.bams)
+            shell("samtools merge -@ {threads} -f {output.bam} " + bams_str + " 2> {log}")
+        
+        shell("samtools index {output.bam}")
+
+
+# 6. R-Coverage calculation (BigWig)
 rule r_coverage_export:
     input:
         bam = "results/bam/{sample}.sorted.bam",
         bai = "results/bam/{sample}.sorted.bam.bai"
     output:
-        bw = "results/bigwig/{sample}.bw",
+        bw  = "results/bigwig/{sample}.bw",
         rds = "results/rds/{sample}_granges.rds"
     params:
-        seq_mode = lambda wildcards: metadata.loc[wildcards.sample, "Seq_Mode"],
-        frag_len = lambda wildcards: int(metadata.loc[wildcards.sample, 'Fragment_Le']) if "Fragment_Le" in metadata.columns and pd.notna(metadata.loc[wildcards.sample, 'Fragment_Le']) else 200
+        seq_mode = lambda wildcards: metadata.loc[metadata["Sample_ID"] == wildcards.sample, "Seq_Mode"].values[0],
+        frag_len = 200
     log:
         "logs/r_coverage/{sample}.log"
     script:
         "scripts/calculate_coverage.R"
 
-# 7. MACS2 Peak Calling für Drosophila (dm6)
+
+# 7. MACS2 Peak Calling
 rule macs2_callpeak:
     input:
         treatment = "results/bam/{sample}.sorted.bam",
-        control = get_control_bam
+        control   = get_control_bam
     output:
-        narrow = "results/peaks/narrowPeak/{sample}_peaks.narrowPeak",
-        xls    = "results/peaks/xls/{sample}_peaks.xls",
-        summits= "results/peaks/summits/{sample}_summits.bed"
+        narrow  = "results/peaks/narrowPeak/{sample}_peaks.narrowPeak",
+        xls     = "results/peaks/xls/{sample}_peaks.xls",
+        summits = "results/peaks/summits/{sample}_summits.bed"
     params:
         name = "{sample}",
         tmp_outdir = "results/peaks/tmp_{sample}",
         gsize = "dm",
-        format_arg = lambda wildcards: "BAMPE" if metadata.loc[wildcards.sample, "Seq_Mode"] == "PE" else "BAM",
-        extsize = lambda wildcards: f"--extsize {int(metadata.loc[wildcards.sample, 'Fragment_Le'])}" if metadata.loc[wildcards.sample, "Seq_Mode"] == "SE" and "Fragment_Le" in metadata.columns and pd.notna(metadata.loc[wildcards.sample, 'Fragment_Le']) else ""
+        format_arg = lambda wildcards: "BAMPE" if metadata.loc[metadata["Sample_ID"] == wildcards.sample, "Seq_Mode"].values[0] == "PE" else "BAM"
     log:
         "logs/macs2/{sample}.log"
     shell:
@@ -170,7 +205,6 @@ rule macs2_callpeak:
             -g {params.gsize} \
             -n {params.name} \
             --outdir {params.tmp_outdir} \
-            {params.extsize} \
             -q 0.01 \
             2> {log}
             
@@ -181,10 +215,11 @@ rule macs2_callpeak:
         rm -rf {params.tmp_outdir}
         """
 
-# 8. Differential Binding Analyse mit DiffBind
+# 8. Differential Peak Analysis via Direct DESeq2 Pipeline
 rule run_diffbind:
     input:
-        bams = expand("results/bam/{sample}.sorted.bam", sample=CHIP_SAMPLES),
+        meta  = metadata_path,
+        bams  = expand("results/bam/{sample}.sorted.bam", sample=CHIP_SAMPLES),
         peaks = expand("results/peaks/narrowPeak/{sample}_peaks.narrowPeak", sample=CHIP_SAMPLES)
     output:
         csv = "results/diffbind/differential_peaks.csv",
@@ -192,32 +227,5 @@ rule run_diffbind:
         ma  = "results/diffbind/plots/ma_plot.pdf"
     log:
         "logs/diffbind/diffbind.log"
-    run:
-        sample_ids_str = ",".join([f'"{s}"' for s in CHIP_SAMPLES])
-        conditions_str = ",".join([f'"{metadata.loc[s, "Condition"]}"' for s in CHIP_SAMPLES])
-        bams_str       = ",".join([f'"{x}"' for x in input.bams])
-        peaks_str      = ",".join([f'"{x}"' for x in input.peaks])
-        
-        r_code = f"""
-        library(DiffBind)
-        
-        samples <- data.frame(
-          SampleID   = c({sample_ids_str}),
-          Condition  = c({conditions_str}),
-          bamReads   = c({bams_str}),
-          Peaks      = c({peaks_str}),
-          PeakCaller = "narrow"
-        )
-
-        db <- dba(sampleSheet = samples)
-        db <- dba.count(db)
-        db <- dba.contrast(db, minMembers = 2)
-        db <- dba.analyze(db)
-
-        res_table <- dba.report(db, th = 1)
-        write.csv(as.data.frame(res_table), "{output.csv}", row.names = FALSE)
-        
-        pdf("{output.pca}"); dba.plotPCA(db, label = DBA_ID); dev.off()
-        pdf("{output.ma}");  dba.plotMA(db); dev.off()
-        """
-        shell(f"Rscript -e '{r_code}' > {log} 2>&1")
+    shell:
+        "Rscript --vanilla scripts/run_diffbind.R {input.meta} {output.csv} {output.pca} {output.ma} > {log} 2>&1"

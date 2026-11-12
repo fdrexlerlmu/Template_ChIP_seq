@@ -1,7 +1,7 @@
-Sample_ID	Target	Sample_Type	Input_Sample	Genotype	Condition	Timepoint	Bio_Replicate	Tissue	Antibody	Fragment_Length	Seq_Mode
-CrebAChIP_Fast_4h_rep1	crebA	ChIP	Input_Fast_4h		Fasted	4	1	fly_head	crebA	200	SE
-CrebAChIP_Fast_4h_rep2	crebA	ChIP	Input_Fast_4h		Fasted	4	1	fly_head	crebA	200	SE
-Input_Fast_4h		Input			Fasted	4	1	fly_head		200	SE
-CrebAChIP_Refed_4h_rep1	crebA	ChIP	Input_Refed_4h		Refed	4	1	fly_head	crebA	200	SE
-CrebAChIP_Refed_4h_rep2	crebA	ChIP	Input_Refed_4h		Refed	4	1	fly_head	crebA	200	SE
-Input_Refed_4h		Input			Refed	4	1	fly_head		200	SE
+Run_ID	Sample_ID	Target	Sample_Type	Input_Sample_ID	Genotype	Condition	Bio_Replicate	Tech_Replicate	Tissue	Seq_Mode	Fragment_Length
+CrebA_ChIP_Fasted_4h_b1_t1	Creba_ChIP_Fasted_4h_rep1	Creba	ChIP	Input_Fasted_4h_rep1	WT	Fasted	1	1	fly_head	SE	200
+CrebA_ChIP_Fasted_4h_b2_t1	Creba_ChIP_Fasted_4h_rep2	Creba	ChIP	Input_Fasted_4h_rep1	WT	Fasted	2	1	fly_head	SE	200
+CrebA_ChIP_Fed_4h_b1_t1	Creba_ChIP_Fed_4h_rep1	Creba	ChIP	Input_Fed_4h_rep1	WT	Fed	1	1	fly_head	SE	200
+CrebA_ChIP_Fed_4h_b2_t1	Creba_ChIP_Fed_4h_rep2	Creba	ChIP	Input_Fed_4h_rep1	WT	Fed	2	1	fly_head	SE	200
+input_Input_fasted_4h_b1_t1	Input_Fasted_4h_rep1	Input	Input	NA	WT	Fasted	1	1	fly_head	SE	200
+input_Input_fed_4h_b1_t1	Input_Fed_4h_rep1	Input	Input	NA	WT	Fed	1	1	fly_head	SE	200

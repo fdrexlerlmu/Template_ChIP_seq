@@ -1,45 +1,69 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# Ordner und Dateinamen definieren
 RAW_DIR="rawdata"
 OUTPUT_FILE="Metadata.txt"
 
 if [ ! -d "$RAW_DIR" ]; then
-    echo "[ERROR] Ordner '$RAW_DIR' nicht gefunden! Bitte im Projektverzeichnis anlegen." >&2
+    echo "[ERROR] Ordner '$RAW_DIR' nicht gefunden!" >&2
     exit 1
 fi
 
-# Temporäre Datei für die Proben-Erfassung
 tmp_list=$(mktemp)
 
-# Alle gzipped FASTQ/TXT-Dateien einlesen
-for f in "$RAW_DIR"/*.{fastq,txt}.gz; do
+for f in "$RAW_DIR"/*.gz; do
     [ -e "$f" ] || continue
-    filename=$(basename "$f")
-    
-    # Suffixe wie _R1, _R2, _1, _2 oder Dateiendungen sauber abschneiden, um die reine Sample_ID zu erhalten
-    if [[ "$filename" =~ ^(.+)(_R[12]|_[12])\.(fastq|txt)\.gz$ ]]; then
-        sample_id="${BASH_REMATCH[1]}"
-        echo "$sample_id" >> "$tmp_list"
-    elif [[ "$filename" =~ ^(.+)\.(fastq|txt)\.gz$ ]]; then
-        sample_id="${BASH_REMATCH[1]}"
-        echo "$sample_id" >> "$tmp_list"
-    fi
+    filename=$(basename "$f" | tr -d '\r')
+    file_id=$(echo "$filename" | sed -E 's/(\.(fastq|fq|txt|gz))+$$//i')
+    echo "$file_id" >> "$tmp_list"
 done
 
-# Vollständigen Header mit allen gewünschten Spalten schreiben
-echo -e "Sample_ID\tTarget\tSample_Type\tInput_Sample_ID\tGenotype\tCondition\tBio_Replicate\tTissue\tAntibody\tFragment_Length\tSeq_Mode" > "$OUTPUT_FILE"
+echo -e "Run_ID\tSample_ID\tTarget\tSample_Type\tInput_Sample_ID\tGenotype\tCondition\tBio_Replicate\tTech_Replicate\tTissue\tSeq_Mode\tFragment_Length" > "$OUTPUT_FILE"
 
-# Eindeutige Proben-IDs einlesen, sortieren und alle restlichen Spalten komplett leer lassen
-while read -r sample_id; do
-    # Jede Spalte ist mit einem Tabulator getrennt, aber leer – so kannst du alles händisch eintragen
-    echo -e "${sample_id}\t\t\t\t\t\t\t\t\t\t"
+while read -r file_id; do
+    [ -z "$file_id" ] && continue
+    file_id=$(echo "$file_id" | tr -d '\r')
+
+    num_fields=$(echo "$file_id" | awk -F'_' '{print NF}')
+
+    if [ "$num_fields" -eq 6 ]; then
+        target_raw=$(echo "$file_id" | awk -F'_' '{print $1}')
+        stype_raw=$(echo "$file_id" | awk -F'_' '{print $2}')
+        cond_raw=$(echo "$file_id" | awk -F'_' '{print $3}')
+        time_raw=$(echo "$file_id" | awk -F'_' '{print $4}')
+        bio_raw=$(echo "$file_id" | awk -F'_' '{print $5}')
+        tech_raw=$(echo "$file_id" | awk -F'_' '{print $6}')
+
+        bio_rep=$(echo "$bio_raw" | tr -d 'bB')
+        tech_rep=$(echo "$tech_raw" | tr -d 'tT')
+
+        cond_lower="$(echo "$cond_raw" | tr '[:upper:]' '[:lower:]')"
+        cond_cap="$(echo "${cond_lower:0:1}" | tr '[:lower:]' '[:upper:]')${cond_lower:1}"
+        
+        target_lower="$(echo "$target_raw" | tr '[:upper:]' '[:lower:]')"
+        target_cap="$(echo "${target_lower:0:1}" | tr '[:lower:]' '[:upper:]')${target_lower:1}"
+
+        stype_lower="$(echo "$stype_raw" | tr '[:upper:]' '[:lower:]')"
+        if [[ "$stype_lower" == "chip" ]]; then
+            sample_type="ChIP"
+            target="$target_cap"
+            # Eindeutige biologische Sample_ID für ChIP (z.B. CrebA_ChIP_Fasted_4h_rep1)
+            sample_id="${target}_ChIP_${cond_cap}_${time_raw}_rep${bio_rep}"
+            # Standardmäßig wird auf Input_Condition_Time_rep1 verwiesen, falls b2 keinen eigenen Input hat
+            input_sample_id="Input_${cond_cap}_${time_raw}_rep1"
+        else
+            sample_type="Input"
+            target="Input"
+            # Einziges 'Input_' Präfix verhindern doppeltes 'Input_Input_'
+            sample_id="Input_${cond_cap}_${time_raw}_rep${bio_rep}"
+            input_sample_id="NA"
+        fi
+
+        echo -e "${file_id}\t${sample_id}\t${target}\t${sample_type}\t${input_sample_id}\tWT\t${cond_cap}\t${bio_rep}\t${tech_rep}\tfly_head\tSE\t200"
+    fi
 done < <(sort -u "$tmp_list") >> "$OUTPUT_FILE"
 
-# Aufräumen
 rm -f "$tmp_list"
 
-# Anzahl der geschriebenen Proben ermitteln (ohne Header)
 num_samples=$(($(wc -l < "$OUTPUT_FILE") - 1))
-echo "[SUCCESS] '$OUTPUT_FILE' wurde mit ${num_samples} Proben generiert!"
+echo "[SUCCESS] '$OUTPUT_FILE' wurde erfolgreich mit ${num_samples} Einträgen generiert!"

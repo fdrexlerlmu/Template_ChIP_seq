@@ -1,49 +1,53 @@
-log <- file(snakemake@log[[1]], open = "wt")
-sink(log, type = "output")
-sink(log, type = "message")
+if (file.exists("renv/activate.R")) source("renv/activate.R")
 
-suppressPackageStartupMessages({
-  library(GenomicAlignments)
-  library(GenomicRanges)
-  library(rtracklayer)
-  library(Rsamtools)
-})
+library(GenomicAlignments)
+library(GenomicRanges)
+library(rtracklayer)
+library(Rsamtools)
+library(GenomeInfoDb)
 
 bam_file <- snakemake@input[["bam"]]
-out_bw   <- snakemake@output[["bw"]]
-out_rds  <- snakemake@output[["rds"]]
+bw_file  <- snakemake@output[["bw"]]
+rds_file <- snakemake@output[["rds"]]
 seq_mode <- snakemake@params[["seq_mode"]]
-frag_len <- as.integer(snakemake@params[["frag_len"]])
 
-param <- ScanBamParam(flag = scanBamFlag(isUnmappedQuery = FALSE, isDuplicate = FALSE))
-
-if (seq_mode == "PE") {
-  # Paired-End: echte biologische Fragmente einlesen
-  pairs <- readGAlignmentPairs(bam_file, param = param)
-  gr_extended <- granges(pairs)
-} else {
-  # Single-End: Reads auf 5'-Start verankern und auf Fragmentlänge verlängern
-  reads <- readGAlignments(bam_file, param = param)
-  gr_reads <- granges(reads)
-  gr_extended <- resize(gr_reads, width = frag_len, fix = "start")
+# Fragmentlänge absichern: Falls NA/NULL -> Fallback auf 200
+frag_len <- suppressWarnings(as.integer(snakemake@params[["frag_len"]]))
+if (is.na(frag_len) || length(frag_len) == 0 || frag_len <= 0) {
+  frag_len <- 200
 }
 
-# WICHTIG: Seqinfo (Chromosomenlängen) direkt aus dem BAM-Header übertragen,
-# damit trim() und coverage() exakt wissen, wo die Chromosomenenden liegen.
-seqinfo(gr_extended) <- seqinfo(BamFile(bam_file))
+bamfile <- BamFile(bam_file)
 
-# Mitochondriale Reads (dmel_mitochondrion_genome) herausfiltern
-gr_extended <- gr_extended[seqnames(gr_extended) != "dmel_mitochondrion_genome"]
+# 1. Alignment einlesen & Fragment-Verlängerung anwenden
+if (seq_mode == "PE") {
+  param <- ScanBamParam(flag = scanBamFlag(isDuplicate = FALSE, isSecondaryAlignment = FALSE))
+  alignments <- readGAlignmentPairs(bamfile, param = param)
+  gr <- granges(alignments, use.mcols = FALSE)
+} else {
+  param <- ScanBamParam(flag = scanBamFlag(isDuplicate = FALSE, isSecondaryAlignment = FALSE))
+  alignments <- readGAlignments(bamfile, param = param)
+  gr <- granges(alignments, use.mcols = FALSE)
+  
+  # Single-End Reads in 5' -> 3' Richtung auf frag_len (200 bp) verlängern
+  gr <- resize(gr, width = frag_len, fix = "start")
+}
 
-# Chromosomenränder sauber trimmen (jetzt mit bekannten Chromosomenlängen)
-gr_extended <- trim(gr_extended)
+# 2. Hauptchromosomen filtern & UCSC-Nomenklatur erzwingen (2L -> chr2L)
+keep_seqs <- c("2L", "2R", "3L", "3R", "4", "X", "Y", "chr2L", "chr2R", "chr3L", "chr3R", "chr4", "chrX", "chrY")
+gr <- gr[seqnames(gr) %in% keep_seqs]
+seqlevels(gr) <- keep_seqs[keep_seqs %in% seqlevels(gr)]
+seqlevelsStyle(gr) <- "UCSC"
 
-# 1. GRanges-Objekt (.rds) abspeichern
-saveRDS(gr_extended, file = out_rds)
+# 3. Coverage (RPM-normalisiert) berechnen
+mapped_reads <- length(gr)
+if (mapped_reads == 0) {
+  stop(paste("Keine gültigen Reads in BAM-Datei gefunden:", bam_file))
+}
 
-# 2. Exakte 1-bp Genom-Coverage berechnen & auf RPM normalisieren
-cov <- coverage(gr_extended)
-total_reads <- length(gr_extended)
-cov_rpm <- cov * (1e6 / total_reads)
+cov <- coverage(gr)
+rpm_cov <- cov * (1e6 / mapped_reads)
 
-export.bw(cov_rpm, out_bw)
+# 4. Exportieren
+export.bw(rpm_cov, con = bw_file)
+saveRDS(gr, file = rds_file)
