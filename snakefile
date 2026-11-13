@@ -23,7 +23,7 @@ if mode_col is None:
 metadata.rename(columns={mode_col: "Seq_Mode"}, inplace=True)
 
 # Säubern aller Text-Spalten
-for col in ["Run_ID", "Sample_ID", "Seq_Mode", "Sample_Type", "Input_Sample_ID", "Condition", "Time"]:
+for col in ["Run_ID", "Sample_ID", "Seq_Mode", "Sample_Type", "Input_Sample_ID", "Condition", "Time", "Target"]:
     if col in metadata.columns:
         metadata[col] = metadata[col].astype(str).str.strip()
 
@@ -40,6 +40,10 @@ all_groups = chip_meta["Group"].unique().tolist()
 # Alle Testgruppen (außer der Referenz) und die daraus resultierenden Kontraste definieren
 TEST_GROUPS = [g for g in all_groups if g != REF_GROUP]
 CONTRASTS = [f"{g}_vs_{REF_GROUP}" for g in TEST_GROUPS]
+
+# Eindeutige Targets extrahieren (z.B. CrebA, Pol2)
+TARGETS = chip_meta["Target"].unique().tolist()
+print(f"[INFO] Gefundene Targets: {TARGETS}")
 
 # 1. Eindeutige Liste aller technischen Läufe (Run_IDs) für Rule 5a
 RUN_IDS = metadata["Run_ID"].unique().tolist()
@@ -111,10 +115,10 @@ rule all:
         # MACS2 Peaks pro ChIP-Probe
         expand("results/peaks/narrowPeak/{sample}_peaks.narrowPeak", sample=CHIP_SAMPLES),
         
-        # Differential Analysis Ausgaben (Multi-Kontrast fähig)
-        expand("results/diffbind/differential_peaks_{contrast}.csv", contrast=CONTRASTS),
-        "results/diffbind/plots/pca_plot.pdf",
-        expand("results/diffbind/plots/ma_plot_{contrast}.pdf", contrast=CONTRASTS)
+        # Differential Analysis Ausgaben (Getrennt nach Target und Kontrast)
+        expand("results/diffbind/{target}/differential_peaks_{contrast}.csv", target=TARGETS, contrast=CONTRASTS),
+        expand("results/diffbind/{target}/plots/pca_{target}.pdf", target=TARGETS),
+        expand("results/diffbind/{target}/plots/ma_plot_{contrast}.pdf", target=TARGETS, contrast=CONTRASTS)
 
 
 # 5a. Einzelne Technische Replikate alignen (landen in results/bam/raw_tmp/)
@@ -223,20 +227,20 @@ rule macs2_callpeak:
         rm -rf {params.tmp_outdir}
         """
 
-
-# 8. Differential Peak Analysis via Direct DESeq2 Pipeline (Multikontrast-fähig)
+# 8. Differential Peak Analysis per Target (Getrennt nach CrebA und Pol2)
 rule run_diffbind:
     input:
         meta  = metadata_path,
         bams  = expand("results/bam/{sample}.sorted.bam", sample=CHIP_SAMPLES),
         peaks = expand("results/peaks/narrowPeak/{sample}_peaks.narrowPeak", sample=CHIP_SAMPLES)
     output:
-        csv = expand("results/diffbind/differential_peaks_{contrast}.csv", contrast=CONTRASTS),
-        pca = "results/diffbind/plots/pca_plot.pdf",
-        ma  = expand("results/diffbind/plots/ma_plot_{contrast}.pdf", contrast=CONTRASTS)
+        csv = expand("results/diffbind/{target}/differential_peaks_{contrast}.csv", contrast=CONTRASTS, target="{target}"),
+        pca = "results/diffbind/{target}/plots/pca_{target}.pdf",
+        ma  = expand("results/diffbind/{target}/plots/ma_plot_{contrast}.pdf", contrast=CONTRASTS, target="{target}")
     params:
-        ref_group = REF_GROUP
+        ref_group = REF_GROUP,
+        target    = "{target}"
     log:
-        "logs/diffbind/diffbind.log"
+        "logs/diffbind/{target}_diffbind.log"
     shell:
-        "Rscript --vanilla scripts/run_diffbind.R {input.meta} {output.pca} {params.ref_group} > {log} 2>&1"
+        "Rscript --vanilla scripts/run_diffbind.R {input.meta} {output.pca} {params.ref_group} {params.target} > {log} 2>&1"

@@ -1,5 +1,3 @@
-if (file.exists("renv/activate.R")) source("renv/activate.R")
-
 library(GenomicAlignments)
 library(GenomicRanges)
 library(rtracklayer)
