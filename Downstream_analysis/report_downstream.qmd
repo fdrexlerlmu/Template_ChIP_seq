@@ -78,98 +78,89 @@ if (dir.exists(anno_base)) {
 ```
 
 ---
+
 ## 3. Motif-Analyse (STREME) pro Kontrast
 
-Übersicht der angereicherten Motive in den differentiellen Peak-Regionen.
+Übersicht der angereicherten Sequenzlogos in den differentiellen Peak-Regionen, verglichen nach Targets und Bedingungen.
 
 ```{r motif-summary, results='asis'}
 motif_base <- "../results/motifs"
 
 if (dir.exists(motif_base)) {
-  # Alle Unterordner einlesen (erwartet Namen im Format z.B. "crebA_Refed_4h_vs_Fed_4h" oder ähnlich)
-  motif_dirs <- list.dirs(motif_base, recursive = FALSE)
+  target_dirs <- list.dirs(motif_base, recursive = FALSE)
   
-  if (length(motif_dirs) > 0) {
-    # Metadaten aus den Ordnernamen extrahieren (Annahme: Ordnerstruktur enthält Target und Kontrast)
-    dir_info <- tibble(path = motif_dirs, folder = basename(motif_dirs)) %>%
-      mutate(
-        # Trennt z.B. "crebA_Refed_4h_vs_Fed_4h" auf (1. Teil = Target, Rest = Kontrast)
-        target = str_extract(folder, "^[^_]+"),
-        contrast = str_remove(folder, "^[^_]+_")
-      )
+  if (length(target_dirs) > 0) {
+    contrast_map <- list()
     
-    # Über alle eindeutigen Kontraste/Zustände iterieren
-    unique_contrasts <- unique(dir_info$contrast)
+    for (t_dir in target_dirs) {
+      t_name <- basename(t_dir)
+      c_dirs <- list.dirs(t_dir, recursive = FALSE)
+      
+      for (c_dir in c_dirs) {
+        c_name <- basename(c_dir)
+        contrast_map[[c_name]] <- c(contrast_map[[c_name]], t_name)
+      }
+    }
+    
+    unique_contrasts <- names(contrast_map)
     
     for (con in unique_contrasts) {
       cat(sprintf("\n\n### Zustand / Kontrast: %s\n\n", con))
+      targets <- unique(contrast_map[[con]])
       
-      # Alle Targets für diesen Kontrast finden
-      sub_info <- dir_info %>% filter(contrast == con)
+      cat('<div style="overflow-x: auto; margin-bottom: 20px;">\n')
+      cat('<table class="table table-bordered" style="width:auto; margin: auto; background-color: white;">\n')
+      cat('<thead>\n<tr style="background-color: #f8f9fa;">\n')
+      cat('<th style="text-align: center; vertical-align: middle;">Rang</th>\n')
+      for (t in targets) {
+        cat(sprintf('<th style="text-align: center; vertical-align: middle;">Target: %s</th>\n', t))
+      }
+      cat('</tr>\n</thead>\n<tbody>\n')
       
-      # Für jedes Target die Logos einlesen
-      target_motifs <- list()
-      for (i in seq_len(nrow(sub_info))) {
-        t_name <- sub_info$target[i]
-        logo_dir <- file.path(sub_info$path[i], "streme_up", "logos")
-        
-        if (dir.exists(logo_dir)) {
-          logos <- sort(list.files(logo_dir, pattern = "\\.png$", full.names = TRUE))
-          target_motifs[[t_name]] <- logos
+      all_logos <- list()
+      max_m <- 0
+      for (t in targets) {
+        l_dir <- file.path(motif_base, t, con, "streme_up", "logos")
+        if (dir.exists(l_dir)) {
+          imgs <- sort(list.files(l_dir, pattern = "\\.png$", full.names = TRUE))
+          all_logos[[t]] <- imgs
+          max_m <- max(max_m, length(imgs))
         }
       }
       
-      if (length(target_motifs) > 0) {
-        # Maximale Anzahl an Motiven über alle Targets ermitteln (z.B. max 5)
-        max_motifs <- max(sapply(target_motifs, length))
-        
-        if (max_motifs > 0) {
-          targets <- names(target_motifs)
+      if (max_m > 0) {
+        for (m_idx in seq_len(max_m)) {
+          cat('<tr>\n')
+          cat(sprintf('<td style="vertical-align: middle; text-align: center; font-weight: bold; background-color: #f8f9fa;">Motiv %d</td>\n', m_idx))
           
-          # HTML-Tabelle für den side-by-side Vergleich aufbauen
-          cat('<table class="table" style="width:auto; margin: auto;">\n')
-          cat('<thead>\n<tr>\n')
-          cat('<th style="text-align: center; background-color: #f8f9fa;">Motiv-Rang</th>\n')
           for (t in targets) {
-            cat(sprintf('<th style="text-align: center; background-color: #f8f9fa;">Target: %s</th>\n', t))
-          }
-          cat('</tr>\n</thead>\n<tbody>\n')
-          
-          # Zeilen für jedes Motiv (Rang 1 bis max_motifs)
-          for (m_idx in seq_len(max_motifs)) {
-            cat('<tr>\n')
-            # Erste Spalte: Motiv-Nummer
-            cat(sprintf('<td style="vertical-align: middle; text-align: center; font-weight: bold;">Motiv %d</td>\n', m_idx))
-            
-            # Für jedes Target das entsprechende Logo-Bild einfügen (falls vorhanden)
-            for (t in targets) {
-              logos <- target_motifs[[t]]
-              cat('<td style="vertical-align: middle; text-align: center; background-color: white; padding: 6px;">\n')
-              if (length(logos) >= m_idx) {
-                cat(sprintf('<img src="%s" width="220" style="background-color: white; display: block; margin: auto;">\n', logos[m_idx]))
-              } else {
-                cat('<span style="color: grey; font-style: italic;">—</span>\n')
-              }
-              cat('</td>\n')
+            imgs <- all_logos[[t]]
+            cat('<td style="vertical-align: middle; text-align: center; background-color: white; padding: 8px;">\n')
+            if (!is.null(imgs) && length(imgs) >= m_idx) {
+              img_base64 <- knitr::image_uri(imgs[m_idx])
+              cat(sprintf('<img src="%s" width="220" style="background-color: white; display: block; margin: auto; border: 1px solid #eaeaea; padding: 3px; border-radius: 4px;">\n', img_base64))
+            } else {
+              cat('<span style="color: grey; font-style: italic;">—</span>\n')
             }
-            cat('</tr>\n')
+            cat('</td>\n')
           }
-          cat('</tbody>\n</table>\n\n')
-          
-        } else {
-          cat("*Keine Logo-Grafiken für diesen Zustand gefunden.*\n")
+          cat('</tr>\n')
         }
       } else {
-        cat("*Keine gültigen Target-Verzeichnisse für diesen Zustand.*\n")
+        cat(sprintf('<tr><td colspan="%d" style="text-align:center;">Keine Logos gefunden</td></tr>\n', length(targets) + 1))
       }
+      cat('</tbody>\n</table>\n</div>\n\n')
     }
   } else {
-    cat("*Keine Verzeichnisse unter results/motifs gefunden.*\n")
+    cat("*Keine Target-Verzeichnisse unter results/motifs gefunden.*\n")
   }
+} else {
+  cat("*Motiv-Verzeichnis nicht gefunden.*\n")
 }
 ```
 
 ---
+
 ## 4. Differentielles Binde-Verhalten & Zielgene pro Kontrast
 
 ```{r contrast-loop, results='asis'}
@@ -182,14 +173,12 @@ if (dir.exists(plots_base)) {
     for (d in contrast_dirs) {
       contrast_name <- basename(d)
       
-      # Dynamische Extraktion von Test- und Baseline-Gruppe für saubere Beschriftung
       parts <- strsplit(contrast_name, "_vs_")[[1]]
       test_group <- if(length(parts) >= 1) parts[1] else "Test"
       base_group <- if(length(parts) >= 2) parts[2] else "Baseline"
       
       cat(sprintf("\n\n### Kontrast: %s\n\n", contrast_name))
       
-      # --- A. Volcano Plot ---
       volcano_rds <- file.path(d, "volcano_data.rds")
       if (file.exists(volcano_rds)) {
         volcano_df <- readRDS(volcano_rds)
@@ -215,7 +204,6 @@ if (dir.exists(plots_base)) {
         cat("\n\n")
       }
       
-      # --- B. Gen-Set Zusammenfassung ---
       venn_rds <- file.path(d, "gene_lists.rds")
       if (file.exists(venn_rds)) {
         gene_lists <- readRDS(venn_rds)
@@ -320,7 +308,6 @@ if (length(contrast_dirs) > 0) {
     }
   }
   
-  # 1. UpSet-Plot für Upregulated Gene
   if (length(master_gene_list_up) > 1) {
     cat("### Schnittmengen der Upregulated Gene\n\n")
     print(
@@ -338,7 +325,6 @@ if (length(contrast_dirs) > 0) {
     cat("*Für den UpSet-Plot der Upregulated Gene werden mindestens 2 Kontraste benötigt.*\n\n")
   }
   
-  # 2. UpSet-Plot für Downregulated Gene
   if (length(master_gene_list_down) > 1) {
     cat("### Schnittmengen der Downregulated Gene\n\n")
     print(
