@@ -46,7 +46,7 @@ if (file.exists("../Metadata.txt")) {
 
 ## 2. Peak Annotation & Genomische Verteilung pro Kontrast
 
-Verteilung der identifizierten Peaks relativ zu genomischen Features, aufgeteilt nach den analysierten Kontrasten.
+Verteilung der **differentiellen** Peaks (signifikant veränderte Bindungsstellen) relativ zu genomischen Features für den jeweiligen Kontrast. Die Prozentwerte zeigen, welcher Anteil der veränderten Peaks in Promoter-Regionen, Introns, Exons oder intergenischen (Enhancer-)Bereichen liegt.
 
 ```{r annotation-plots, results='asis'}
 anno_base <- "../results/annotation"
@@ -78,8 +78,99 @@ if (dir.exists(anno_base)) {
 ```
 
 ---
+## 3. Motif-Analyse (STREME) pro Kontrast
 
-## 3. Differentielles Binde-Verhalten & Zielgene pro Kontrast
+Übersicht der angereicherten Motive in den differentiellen Peak-Regionen.
+
+```{r motif-summary, results='asis'}
+motif_base <- "../results/motifs"
+
+if (dir.exists(motif_base)) {
+  # Alle Unterordner einlesen (erwartet Namen im Format z.B. "crebA_Refed_4h_vs_Fed_4h" oder ähnlich)
+  motif_dirs <- list.dirs(motif_base, recursive = FALSE)
+  
+  if (length(motif_dirs) > 0) {
+    # Metadaten aus den Ordnernamen extrahieren (Annahme: Ordnerstruktur enthält Target und Kontrast)
+    dir_info <- tibble(path = motif_dirs, folder = basename(motif_dirs)) %>%
+      mutate(
+        # Trennt z.B. "crebA_Refed_4h_vs_Fed_4h" auf (1. Teil = Target, Rest = Kontrast)
+        target = str_extract(folder, "^[^_]+"),
+        contrast = str_remove(folder, "^[^_]+_")
+      )
+    
+    # Über alle eindeutigen Kontraste/Zustände iterieren
+    unique_contrasts <- unique(dir_info$contrast)
+    
+    for (con in unique_contrasts) {
+      cat(sprintf("\n\n### Zustand / Kontrast: %s\n\n", con))
+      
+      # Alle Targets für diesen Kontrast finden
+      sub_info <- dir_info %>% filter(contrast == con)
+      
+      # Für jedes Target die Logos einlesen
+      target_motifs <- list()
+      for (i in seq_len(nrow(sub_info))) {
+        t_name <- sub_info$target[i]
+        logo_dir <- file.path(sub_info$path[i], "streme_up", "logos")
+        
+        if (dir.exists(logo_dir)) {
+          logos <- sort(list.files(logo_dir, pattern = "\\.png$", full.names = TRUE))
+          target_motifs[[t_name]] <- logos
+        }
+      }
+      
+      if (length(target_motifs) > 0) {
+        # Maximale Anzahl an Motiven über alle Targets ermitteln (z.B. max 5)
+        max_motifs <- max(sapply(target_motifs, length))
+        
+        if (max_motifs > 0) {
+          targets <- names(target_motifs)
+          
+          # HTML-Tabelle für den side-by-side Vergleich aufbauen
+          cat('<table class="table" style="width:auto; margin: auto;">\n')
+          cat('<thead>\n<tr>\n')
+          cat('<th style="text-align: center; background-color: #f8f9fa;">Motiv-Rang</th>\n')
+          for (t in targets) {
+            cat(sprintf('<th style="text-align: center; background-color: #f8f9fa;">Target: %s</th>\n', t))
+          }
+          cat('</tr>\n</thead>\n<tbody>\n')
+          
+          # Zeilen für jedes Motiv (Rang 1 bis max_motifs)
+          for (m_idx in seq_len(max_motifs)) {
+            cat('<tr>\n')
+            # Erste Spalte: Motiv-Nummer
+            cat(sprintf('<td style="vertical-align: middle; text-align: center; font-weight: bold;">Motiv %d</td>\n', m_idx))
+            
+            # Für jedes Target das entsprechende Logo-Bild einfügen (falls vorhanden)
+            for (t in targets) {
+              logos <- target_motifs[[t]]
+              cat('<td style="vertical-align: middle; text-align: center; background-color: white; padding: 6px;">\n')
+              if (length(logos) >= m_idx) {
+                cat(sprintf('<img src="%s" width="220" style="background-color: white; display: block; margin: auto;">\n', logos[m_idx]))
+              } else {
+                cat('<span style="color: grey; font-style: italic;">—</span>\n')
+              }
+              cat('</td>\n')
+            }
+            cat('</tr>\n')
+          }
+          cat('</tbody>\n</table>\n\n')
+          
+        } else {
+          cat("*Keine Logo-Grafiken für diesen Zustand gefunden.*\n")
+        }
+      } else {
+        cat("*Keine gültigen Target-Verzeichnisse für diesen Zustand.*\n")
+      }
+    }
+  } else {
+    cat("*Keine Verzeichnisse unter results/motifs gefunden.*\n")
+  }
+}
+```
+
+---
+## 4. Differentielles Binde-Verhalten & Zielgene pro Kontrast
 
 ```{r contrast-loop, results='asis'}
 plots_base <- "../results/plots"
@@ -90,6 +181,11 @@ if (dir.exists(plots_base)) {
   if (length(contrast_dirs) > 0) {
     for (d in contrast_dirs) {
       contrast_name <- basename(d)
+      
+      # Dynamische Extraktion von Test- und Baseline-Gruppe für saubere Beschriftung
+      parts <- strsplit(contrast_name, "_vs_")[[1]]
+      test_group <- if(length(parts) >= 1) parts[1] else "Test"
+      base_group <- if(length(parts) >= 2) parts[2] else "Baseline"
       
       cat(sprintf("\n\n### Kontrast: %s\n\n", contrast_name))
       
@@ -104,7 +200,13 @@ if (dir.exists(plots_base)) {
           theme_minimal() +
           geom_vline(xintercept = c(-1, 1), linetype = "dashed", color = "grey40") +
           geom_hline(yintercept = -log10(0.05), linetype = "dashed", color = "grey40") +
-          labs(title = paste("Volcano —", contrast_name), x = "Log2 Fold Change", y = "-Log10 padj", color = "Status") +
+          labs(
+            title = paste("Volcano —", contrast_name), 
+            subtitle = sprintf("Positive Werte: Stärker in %s | Negative Werte: Stärker in Baseline (%s)", test_group, base_group),
+            x = sprintf("Log2 Fold Change (%s / %s)", test_group, base_group), 
+            y = "-Log10 padj", 
+            color = "Bindungsstatus"
+          ) +
           geom_text_repel(
             data = head(volcano_df %>% filter(Significance != "Not Sig") %>% arrange(padj), 10),
             aes(label = SYMBOL), size = 3.2, max.overlaps = 15
@@ -132,47 +234,6 @@ if (dir.exists(plots_base)) {
     }
   } else {
     cat("Keine Kontrast-Unterordner gefunden.")
-  }
-}
-```
-
----
-
-## 4. Motif-Analyse (STREME) pro Kontrast
-
-Übersicht der angereicherten Motive in den differentiellen Peak-Regionen.
-
-```{r motif-summary, results='asis'}
-motif_base <- "../results/motifs"
-
-if (dir.exists(motif_base)) {
-  contrast_dirs <- list.dirs(motif_base, recursive = FALSE)
-  
-  for (d in contrast_dirs) {
-    contrast_name <- basename(d)
-    streme_rds <- file.path(d, "streme_up.rds")
-    
-    cat(sprintf("\n\n### Motive für Kontrast: %s\n\n", contrast_name))
-    
-    if (file.exists(streme_rds)) {
-      streme_res <- readRDS(streme_rds)
-      motif_df <- as_tibble(streme_res)
-      
-      motif_table <- motif_df %>%
-        mutate(
-          PValue = if ("pval" %in% colnames(.)) as.numeric(pval) 
-                   else if ("log_pval" %in% colnames(.)) exp(as.numeric(log_pval)) 
-                   else NA_real_,
-          EValue = if ("evalue" %in% colnames(.)) as.numeric(evalue) else NA_real_
-        ) %>%
-        dplyr::select(any_of(c("Motif-ID" = "name", "Consensus" = "consensus", "P-Value" = "PValue", "E-Value" = "EValue", "Sites" = "pos_count"))) %>%
-        head(5)
-      
-      print(knitr::kable(motif_table, caption = paste("Top Motive (STREME) —", contrast_name), digits = 4))
-      cat("\n")
-    } else {
-      cat("*Keine Motivergebnisse für diesen Kontrast gefunden.*\n")
-    }
   }
 }
 ```
@@ -224,5 +285,94 @@ if (dir.exists(enrich_base)) {
       }
     }
   }
+}
+```
+
+---
+
+## 6. Globaler Kontrast-Vergleich (UpSet-Plot)
+
+Übergreifender Vergleich der regulierten Zielgene über alle analysierten Kontraste hinweg.
+
+```{r global-upset, fig.width=10, fig.height=6, results='asis'}
+library(UpSetR)
+
+plots_base <- "../results/plots"
+contrast_dirs <- list.dirs(plots_base, recursive = FALSE)
+
+master_gene_list_up <- list()
+master_gene_list_down <- list()
+
+if (length(contrast_dirs) > 0) {
+  for (d in contrast_dirs) {
+    c_name <- basename(d)
+    rds_path <- file.path(d, "gene_lists.rds")
+    
+    if (file.exists(rds_path)) {
+      g_lists <- readRDS(rds_path)
+      
+      if (!is.null(g_lists$Upregulated) && length(g_lists$Upregulated) > 0) {
+        master_gene_list_up[[paste0(c_name, " (Up)")]] <- g_lists$Upregulated
+      }
+      if (!is.null(g_lists$Downregulated) && length(g_lists$Downregulated) > 0) {
+        master_gene_list_down[[paste0(c_name, " (Down)")]] <- g_lists$Downregulated
+      }
+    }
+  }
+  
+  # 1. UpSet-Plot für Upregulated Gene
+  if (length(master_gene_list_up) > 1) {
+    cat("### Schnittmengen der Upregulated Gene\n\n")
+    print(
+      upset(
+        fromList(master_gene_list_up), 
+        nsets = length(master_gene_list_up), 
+        sets.bar.color = "#d95f02", 
+        main.bar.color = "#2b5c8f", 
+        order.by = "freq",
+        text.scale = 1.1
+      )
+    )
+    cat("\n\n")
+  } else {
+    cat("*Für den UpSet-Plot der Upregulated Gene werden mindestens 2 Kontraste benötigt.*\n\n")
+  }
+  
+  # 2. UpSet-Plot für Downregulated Gene
+  if (length(master_gene_list_down) > 1) {
+    cat("### Schnittmengen der Downregulated Gene\n\n")
+    print(
+      upset(
+        fromList(master_gene_list_down), 
+        nsets = length(master_gene_list_down), 
+        sets.bar.color = "#2b5c8f", 
+        main.bar.color = "#2b5c8f", 
+        order.by = "freq",
+        text.scale = 1.1
+      )
+    )
+    cat("\n\n")
+  } else {
+    cat("*Für den UpSet-Plot der Downregulated Gene werden mindestens 2 Kontraste benötigt.*\n\n")
+  }
+  
+} else {
+  cat("Keine Kontrast-Verzeichnisse für den UpSet-Plot gefunden.\n")
+}
+```
+
+---
+
+## 7. Kinetische Profil-Cluster (Dynamische Trajektorien)
+
+Übergreifende Cluster-Analyse der Bindungsdynamiken über alle untersuchten Ernährungszustände und Zeitpunkte hinweg. Identifiziert transiente, sustained und Rebound-Muster (z. B. typisch für *CrebA*-getriebene Regulationskreisläufe).
+
+```{r kinetic-clusters, fig.width=10, fig.height=7}
+traj_plot_path <- "../results/enrichment/kinetic_trajectory_clusters.png"
+
+if (file.exists(traj_plot_path)) {
+  knitr::include_graphics(traj_plot_path)
+} else {
+  cat("Kinetischer Trajektorien-Plot nicht gefunden (erfordert ausreichend signifikante Peaks über mehrere Kontraste).")
 }
 ```
