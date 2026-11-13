@@ -1,0 +1,98 @@
+#!/usr/bin/env Rscript
+suppressPackageStartupMessages({
+  library(tidyverse)
+  library(GenomicRanges)
+  library(BSgenome.Dmelanogaster.UCSC.dm6)
+  library(memes)
+  library(BiocParallel)
+  library(cli)
+  library(parallel)
+})
+
+# 1. CPU-Kerne dynamisch ermitteln (2 Kerne Puffer für macOS/RStudio)
+total_cores <- parallel::detectCores(logical = FALSE)
+num_workers <- max(1, total_cores - 2)
+
+# 2. Parallelisierung für R & OpenMP/STREME setzen
+register(MulticoreParam(workers = num_workers))
+Sys.setenv(OMP_NUM_THREADS = num_workers)
+
+conda_bin <- file.path(Sys.getenv("CONDA_PREFIX"), "bin")
+Sys.setenv(MEME_BIN = conda_bin)
+options(memes.bin_path = conda_bin)
+
+args <- commandArgs(trailingOnly = TRUE)
+if (length(args) < 2) {
+  stop("Fehler: Bitte übergebe den Annotations-Ordner und den Motiv-Ausgabeordner als Argumente!")
+}
+
+anno_dir <- args[1] # Entspricht jetzt z.B. results/annotation/Fasted_4h_vs_Fed_4h/
+out_dir  <- args[2] # Entspricht jetzt z.B. results/motifs/Fasted_4h_vs_Fed_4h/
+
+dir.create(out_dir, showWarnings = FALSE, recursive = TRUE)
+
+contrast_name <- basename(anno_dir)
+cli_h1("Downstream: Motif Enrichment (STREME) für Kontrast: {contrast_name}")
+cli_alert_info("System-Check: {total_cores} Kerne erkannt. Nutze dynamisch {num_workers} Kerne.")
+
+# Pfad zur annotierten CSV direkt in diesem Kontrast-Ordner
+specific_anno_csv <- file.path(anno_dir, "annotated_peaks.csv")
+
+if (!file.exists(specific_anno_csv)) {
+  cli_alert_warning("Keine annotierten Peaks unter {specific_anno_csv} gefunden. Überspringe STREME.")
+  quit(status = 0)
+}
+
+# 3. Daten einlesen & filtern
+cli_progress_step("Lade & sortiere annotierte Peaks...", spinner = TRUE)
+df <- read.csv(specific_anno_csv)
+
+if (!all(c("padj", "log2FoldChange") %in% colnames(df))) {
+  cli_alert_warning("Spalten 'padj' oder 'log2FoldChange' in {specific_anno_csv} nicht gefunden.")
+  quit(status = 0)
+}
+
+df_up <- df %>% 
+  filter(padj < 0.05 & log2FoldChange > 0) %>% 
+  arrange(padj) %>% 
+  head(500)
+cli_progress_done()
+
+if (nrow(df_up) > 0) {
+  cli_alert_info("Verarbeite {nrow(df_up)} Top-Peaks für die Motif-Suche.")
+  
+  cli_progress_step("Erstelle GRanges & reduziere Überlappungen...", spinner = TRUE)
+  sig_up <- makeGRangesFromDataFrame(df_up, keep.extra.columns = TRUE)
+  sig_up_clean <- reduce(sig_up)
+  cli_progress_done()
+  
+  cli_progress_step("Extrahiere Fasta-Sequenzen aus dm6...", spinner = TRUE)
+  seqs_up <- get_sequence(sig_up_clean, BSgenome.Dmelanogaster.UCSC.dm6)
+  cli_progress_done()
+  
+  # Zielordner für STREME-Ergebnisse dieses Kontrasts
+  streme_out_dir <- file.path(out_dir, "streme_up")
+  dir.create(streme_out_dir, showWarnings = FALSE, recursive = TRUE)
+  
+  # 4. STREME-Aufruf
+  cli_alert_info("Starte STREME Motif-Suche...")
+  
+  streme_res <- runStreme(
+    seqs_up, 
+    control = "shuffle", 
+    outdir = streme_out_dir,
+    nmotifs = 5,
+    verbosity = 2
+  )
+  
+  cli_progress_step("Speichere Ergebnisse...", spinner = TRUE)
+  saveRDS(streme_res, file.path(out_dir, "streme_up.rds"), compress = FALSE)
+  cli_progress_done()
+  
+  cli_alert_success("STREME Motif-Analyse für {contrast_name} erfolgreich abgeschlossen!")
+  
+} else {
+  cli_alert_warning("Keine signifikanten Up-Peaks (padj < 0.05 & log2FoldChange > 0) für {contrast_name} gefunden.")
+}
+
+cli_h1("Motif-Analyse für {contrast_name} abgeschlossen!")

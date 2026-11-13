@@ -23,11 +23,23 @@ if mode_col is None:
 metadata.rename(columns={mode_col: "Seq_Mode"}, inplace=True)
 
 # Säubern aller Text-Spalten
-for col in ["Run_ID", "Sample_ID", "Seq_Mode", "Sample_Type", "Input_Sample_ID"]:
+for col in ["Run_ID", "Sample_ID", "Seq_Mode", "Sample_Type", "Input_Sample_ID", "Condition", "Time"]:
     if col in metadata.columns:
         metadata[col] = metadata[col].astype(str).str.strip()
 
 metadata["Seq_Mode"] = metadata["Seq_Mode"].str.upper()
+
+# Referenzgruppe aus der config.yml laden (Fallback: "Fed_4h")
+REF_GROUP = config.get("reference_condition", "Fed_4h")
+
+# Kombiniere Condition und Time für alle ChIP-Proben, um die Gruppen zu bestimmen
+metadata["Group"] = metadata["Condition"].astype(str) + "_" + metadata["Time"].astype(str)
+chip_meta = metadata[metadata["Sample_Type"].str.upper() == "CHIP"].copy()
+all_groups = chip_meta["Group"].unique().tolist()
+
+# Alle Testgruppen (außer der Referenz) und die daraus resultierenden Kontraste definieren
+TEST_GROUPS = [g for g in all_groups if g != REF_GROUP]
+CONTRASTS = [f"{g}_vs_{REF_GROUP}" for g in TEST_GROUPS]
 
 # 1. Eindeutige Liste aller technischen Läufe (Run_IDs) für Rule 5a
 RUN_IDS = metadata["Run_ID"].unique().tolist()
@@ -36,8 +48,7 @@ RUN_IDS = metadata["Run_ID"].unique().tolist()
 SAMPLES = metadata["Sample_ID"].unique().tolist()
 
 # 3. Eindeutige Liste aller ChIP-Proben (biologisch) für Peak Calling & DiffBind
-chip_metadata = metadata[metadata["Sample_Type"].str.upper() == "CHIP"].copy()
-CHIP_SAMPLES = chip_metadata["Sample_ID"].unique().tolist()
+CHIP_SAMPLES = chip_meta["Sample_ID"].unique().tolist()
 
 
 # 3. HILFSFUNKTIONEN
@@ -45,7 +56,6 @@ CHIP_SAMPLES = chip_metadata["Sample_ID"].unique().tolist()
 def get_fastq_inputs(wildcards):
     """Sucht die passenden FASTQ/TXT-Dateien basierend auf der Run_ID in rawdata/."""
     run_id = wildcards.run_id
-    # Mode anhand der Run_ID aus dem DataFrame ermitteln
     mode_series = metadata.loc[metadata["Run_ID"] == run_id, "Seq_Mode"]
     if mode_series.empty:
         raise KeyError(f"Run_ID '{run_id}' nicht in Metadata.txt gefunden!")
@@ -101,18 +111,18 @@ rule all:
         # MACS2 Peaks pro ChIP-Probe
         expand("results/peaks/narrowPeak/{sample}_peaks.narrowPeak", sample=CHIP_SAMPLES),
         
-        # Differential Analysis Ausgaben
-        "results/diffbind/differential_peaks.csv",
+        # Differential Analysis Ausgaben (Multi-Kontrast fähig)
+        expand("results/diffbind/differential_peaks_{contrast}.csv", contrast=CONTRASTS),
         "results/diffbind/plots/pca_plot.pdf",
-        "results/diffbind/plots/ma_plot.pdf"
+        expand("results/diffbind/plots/ma_plot_{contrast}.pdf", contrast=CONTRASTS)
 
 
-# 5a. Einzelne Technische Replikate alignen (landen strikt in results/bam/raw/)
+# 5a. Einzelne Technische Replikate alignen (landen in results/bam/raw_tmp/)
 rule align_tech_replicate:
     input:
         unpack(get_fastq_inputs)  # Nimmt wildcards.run_id
     output:
-        bam = temp("results/bam/raw/{run_id}.sorted.bam")
+        bam = temp("results/bam/raw_tmp/{run_id}.sorted.bam")
     params:
         prefix = config.get("genome", {}).get("index_prefix", "genome/bowtie2/dm6") if isinstance(config.get("genome"), dict) else config.get("bowtie2_index", "genome/bowtie2/dm6"),
         mode   = lambda wildcards: metadata.loc[metadata["Run_ID"] == wildcards.run_id, "Seq_Mode"].values[0]
@@ -133,17 +143,16 @@ rule align_tech_replicate:
                 "samtools sort -@ 2 -m 1G -o {output.bam} -"
             )
 
-
 # 5b. Technische Replikate pro biologischer Sample_ID zusammenführen (landen in results/bam/)
 rule merge_tech_replicates:
     input:
         bams = lambda wildcards: [
-            f"results/bam/raw/{run_id}.sorted.bam" 
+            f"results/bam/raw_tmp/{run_id}.sorted.bam" 
             for run_id in metadata[metadata["Sample_ID"] == wildcards.sample]["Run_ID"]
         ]
     output:
-        bam = "results/bam/{sample,\w+}.sorted.bam",
-        bai = "results/bam/{sample,\w+}.sorted.bam.bai"
+        bam = "results/bam/{sample,[^/]+}.sorted.bam",
+        bai = "results/bam/{sample,[^/]+}.sorted.bam.bai"
     threads: 4
     log:
         "logs/merge/{sample}.log"
@@ -159,7 +168,6 @@ rule merge_tech_replicates:
             shell("samtools merge -@ {threads} -f {output.bam} " + bams_str + " 2> {log}")
         
         shell("samtools index {output.bam}")
-
 
 # 6. R-Coverage calculation (BigWig)
 rule r_coverage_export:
@@ -215,17 +223,20 @@ rule macs2_callpeak:
         rm -rf {params.tmp_outdir}
         """
 
-# 8. Differential Peak Analysis via Direct DESeq2 Pipeline
+
+# 8. Differential Peak Analysis via Direct DESeq2 Pipeline (Multikontrast-fähig)
 rule run_diffbind:
     input:
         meta  = metadata_path,
         bams  = expand("results/bam/{sample}.sorted.bam", sample=CHIP_SAMPLES),
         peaks = expand("results/peaks/narrowPeak/{sample}_peaks.narrowPeak", sample=CHIP_SAMPLES)
     output:
-        csv = "results/diffbind/differential_peaks.csv",
+        csv = expand("results/diffbind/differential_peaks_{contrast}.csv", contrast=CONTRASTS),
         pca = "results/diffbind/plots/pca_plot.pdf",
-        ma  = "results/diffbind/plots/ma_plot.pdf"
+        ma  = expand("results/diffbind/plots/ma_plot_{contrast}.pdf", contrast=CONTRASTS)
+    params:
+        ref_group = REF_GROUP
     log:
         "logs/diffbind/diffbind.log"
     shell:
-        "Rscript --vanilla scripts/run_diffbind.R {input.meta} {output.csv} {output.pca} {output.ma} > {log} 2>&1"
+        "Rscript --vanilla scripts/run_diffbind.R {input.meta} {output.pca} {params.ref_group} > {log} 2>&1"

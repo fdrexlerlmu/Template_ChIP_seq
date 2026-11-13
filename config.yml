@@ -3,6 +3,7 @@ metadata: "Metadata.txt"
 raw_dir: "rawdata"
 ref_dir: "ref"
 results_dir: "results"
+reference_condition: "Fed_4h"
 
 # Referenzgenom (Drosophila melanogaster release-110 / dm6)
 genome:

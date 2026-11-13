@@ -18,7 +18,8 @@ for f in "$RAW_DIR"/*.gz; do
     echo "$file_id" >> "$tmp_list"
 done
 
-echo -e "Run_ID\tSample_ID\tTarget\tSample_Type\tInput_Sample_ID\tGenotype\tCondition\tBio_Replicate\tTech_Replicate\tTissue\tSeq_Mode\tFragment_Length" > "$OUTPUT_FILE"
+# Header um die Spalte 'Time' ergänzt
+echo -e "Run_ID\tSample_ID\tTarget\tSample_Type\tInput_Sample_ID\tGenotype\tCondition\tTime\tBio_Replicate\tTech_Replicate\tTissue\tSeq_Mode\tFragment_Length" > "$OUTPUT_FILE"
 
 while read -r file_id; do
     [ -z "$file_id" ] && continue
@@ -47,19 +48,17 @@ while read -r file_id; do
         if [[ "$stype_lower" == "chip" ]]; then
             sample_type="ChIP"
             target="$target_cap"
-            # Eindeutige biologische Sample_ID für ChIP (z.B. CrebA_ChIP_Fasted_4h_rep1)
             sample_id="${target}_ChIP_${cond_cap}_${time_raw}_rep${bio_rep}"
-            # Standardmäßig wird auf Input_Condition_Time_rep1 verwiesen, falls b2 keinen eigenen Input hat
             input_sample_id="Input_${cond_cap}_${time_raw}_rep1"
         else
             sample_type="Input"
             target="Input"
-            # Einziges 'Input_' Präfix verhindern doppeltes 'Input_Input_'
             sample_id="Input_${cond_cap}_${time_raw}_rep${bio_rep}"
             input_sample_id="NA"
         fi
 
-        echo -e "${file_id}\t${sample_id}\t${target}\t${sample_type}\t${input_sample_id}\tWT\t${cond_cap}\t${bio_rep}\t${tech_rep}\tfly_head\tSE\t200"
+        # ${time_raw} wird nun in der neuen Spalte ausgegeben
+        echo -e "${file_id}\t${sample_id}\t${target}\t${sample_type}\t${input_sample_id}\tWT\t${cond_cap}\t${time_raw}\t${bio_rep}\t${tech_rep}\tfly_head\tSE\t200"
     fi
 done < <(sort -u "$tmp_list") >> "$OUTPUT_FILE"
 

@@ -1,0 +1,228 @@
+---
+title: "ChIP-seq Downstream Analysis Report"
+author: "Fabian"
+date: today
+format:
+  html:
+    toc: true
+    toc-depth: 3
+    toc-location: left
+    code-fold: true
+    embed-resources: true
+    theme: cosmo
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(
+  echo = FALSE,
+  warning = FALSE,
+  message = FALSE
+)
+
+suppressPackageStartupMessages({
+  library(tidyverse)
+  library(ggrepel)
+  library(ggvenn)
+  library(ChIPseeker)
+  library(clusterProfiler)
+  library(enrichplot)
+})
+```
+
+## 1. Experimentelles Set-up
+
+Übersicht der ausgewerteten ChIP-seq Proben aus der Metadatentabelle.
+
+```{r metadata}
+if (file.exists("../Metadata.txt")) {
+  metadata <- read.delim("../Metadata.txt")
+  knitr::kable(metadata, caption = "Proben-Metadaten")
+} else {
+  cat("Hinweis: Metadata.txt im Root-Verzeichnis nicht gefunden.")
+}
+```
+
+---
+
+## 2. Peak Annotation & Genomische Verteilung pro Kontrast
+
+Verteilung der identifizierten Peaks relativ zu genomischen Features, aufgeteilt nach den analysierten Kontrasten.
+
+```{r annotation-plots, results='asis'}
+anno_base <- "../results/annotation"
+
+if (dir.exists(anno_base)) {
+  contrast_dirs <- list.dirs(anno_base, recursive = FALSE)
+  
+  if (length(contrast_dirs) > 0) {
+    for (d in contrast_dirs) {
+      contrast_name <- basename(d)
+      rds_path <- file.path(d, "peakAnno.rds")
+      
+      cat(sprintf("\n\n### Kontrast: %s\n\n", contrast_name))
+      
+      if (file.exists(rds_path)) {
+        peakAnno <- readRDS(rds_path)
+        print(plotAnnoBar(peakAnno) + labs(title = paste("Genomische Annotation —", contrast_name)))
+        cat("\n")
+      } else {
+        cat("*Keine Annotation-Datei für diesen Kontrast gefunden.*\n")
+      }
+    }
+  } else {
+    cat("Keine Unterordner in results/annotation gefunden.")
+  }
+} else {
+  cat("Annotations-Verzeichnis nicht gefunden.")
+}
+```
+
+---
+
+## 3. Differentielles Binde-Verhalten & Zielgene pro Kontrast
+
+```{r contrast-loop, results='asis'}
+plots_base <- "../results/plots"
+
+if (dir.exists(plots_base)) {
+  contrast_dirs <- list.dirs(plots_base, recursive = FALSE)
+  
+  if (length(contrast_dirs) > 0) {
+    for (d in contrast_dirs) {
+      contrast_name <- basename(d)
+      
+      cat(sprintf("\n\n### Kontrast: %s\n\n", contrast_name))
+      
+      # --- A. Volcano Plot ---
+      volcano_rds <- file.path(d, "volcano_data.rds")
+      if (file.exists(volcano_rds)) {
+        volcano_df <- readRDS(volcano_rds)
+        
+        p_vol <- ggplot(volcano_df, aes(x = log2FoldChange, y = -log10(padj), color = Significance)) +
+          geom_point(alpha = 0.6, size = 1.5) +
+          scale_color_manual(values = c("Down" = "#2b5c8f", "Not Sig" = "grey70", "Up" = "#d95f02")) +
+          theme_minimal() +
+          geom_vline(xintercept = c(-1, 1), linetype = "dashed", color = "grey40") +
+          geom_hline(yintercept = -log10(0.05), linetype = "dashed", color = "grey40") +
+          labs(title = paste("Volcano —", contrast_name), x = "Log2 Fold Change", y = "-Log10 padj", color = "Status") +
+          geom_text_repel(
+            data = head(volcano_df %>% filter(Significance != "Not Sig") %>% arrange(padj), 10),
+            aes(label = SYMBOL), size = 3.2, max.overlaps = 15
+          )
+        print(p_vol)
+        cat("\n\n")
+      }
+      
+      # --- B. Gen-Set Zusammenfassung ---
+      venn_rds <- file.path(d, "gene_lists.rds")
+      if (file.exists(venn_rds)) {
+        gene_lists <- readRDS(venn_rds)
+        
+        cat(sprintf("*Gen-Set Zusammenfassung für %s:* **%d** Upregulated, **%d** Downregulated\n\n", 
+                    contrast_name, length(gene_lists$Upregulated), length(gene_lists$Downregulated)))
+        
+        p_venn <- ggvenn(
+          gene_lists, 
+          fill_color = c("#d95f02", "#2b5c8f"),
+          stroke_size = 0.5, set_name_size = 4, text_size = 3.5
+        )
+        print(p_venn)
+        cat("\n\n---\n\n")
+      }
+    }
+  } else {
+    cat("Keine Kontrast-Unterordner gefunden.")
+  }
+}
+```
+
+---
+
+## 4. Motif-Analyse (STREME) pro Kontrast
+
+Übersicht der angereicherten Motive in den differentiellen Peak-Regionen.
+
+```{r motif-summary, results='asis'}
+motif_base <- "../results/motifs"
+
+if (dir.exists(motif_base)) {
+  contrast_dirs <- list.dirs(motif_base, recursive = FALSE)
+  
+  for (d in contrast_dirs) {
+    contrast_name <- basename(d)
+    streme_rds <- file.path(d, "streme_up.rds")
+    
+    cat(sprintf("\n\n### Motive für Kontrast: %s\n\n", contrast_name))
+    
+    if (file.exists(streme_rds)) {
+      streme_res <- readRDS(streme_rds)
+      motif_df <- as_tibble(streme_res)
+      
+      motif_table <- motif_df %>%
+        mutate(
+          PValue = if ("pval" %in% colnames(.)) as.numeric(pval) 
+                   else if ("log_pval" %in% colnames(.)) exp(as.numeric(log_pval)) 
+                   else NA_real_,
+          EValue = if ("evalue" %in% colnames(.)) as.numeric(evalue) else NA_real_
+        ) %>%
+        dplyr::select(any_of(c("Motif-ID" = "name", "Consensus" = "consensus", "P-Value" = "PValue", "E-Value" = "EValue", "Sites" = "pos_count"))) %>%
+        head(5)
+      
+      print(knitr::kable(motif_table, caption = paste("Top Motive (STREME) —", contrast_name), digits = 4))
+      cat("\n")
+    } else {
+      cat("*Keine Motivergebnisse für diesen Kontrast gefunden.*\n")
+    }
+  }
+}
+```
+
+---
+
+## 5. Funktionelle Anreicherung & Gen-Cluster-Aktivierung
+
+### 5.1 Gruppenübergreifender Cluster-Vergleich (CompareCluster)
+Vergleich der biologischen Prozesse über alle Kontraste hinweg.
+
+```{r compare-cluster-plot, fig.width=11, fig.height=8}
+ck_rds <- "../results/enrichment/compareCluster_go_bp_up.rds"
+
+if (file.exists(ck_rds)) {
+  ck_up <- readRDS(ck_rds)
+  dotplot(ck_up, showCategory = 10, title = "Vergleich aktiver biologischer Prozesse (Upregulated)") +
+    theme_minimal() +
+    theme(axis.text.x = element_text(angle = 45, hjust = 1))
+} else {
+  cat("CompareCluster-Ergebnisdatei nicht gefunden (erfordert mindestens 2 Kontraste).")
+}
+```
+
+### 5.2 Zelluläre Lokalisierung der Zielgene (GO: Cellular Component) pro Kontrast
+Zeigt, in welchen zellulären Kompartimenten die Zielgene angereichert sind.
+
+```{r go-cc-plots, results='asis'}
+enrich_base <- "../results/enrichment"
+
+if (dir.exists(enrich_base)) {
+  contrast_dirs <- list.dirs(enrich_base, recursive = FALSE)
+  
+  for (d in contrast_dirs) {
+    contrast_name <- basename(d)
+    cc_rds <- file.path(d, "enrich_go_cc_Upregulated.rds")
+    
+    if (file.exists(cc_rds)) {
+      cat(sprintf("\n\n#### Zelluläre Komponenten: %s\n\n", contrast_name))
+      ego_cc <- readRDS(cc_rds)
+      
+      if (!is.null(ego_cc) && nrow(as.data.frame(ego_cc)) > 0) {
+        print(barplot(ego_cc, showCategory = 10) +
+          ggplot2::labs(title = paste("GO: CC —", contrast_name)) +
+          ggplot2::theme_minimal())
+        cat("\n")
+      } else {
+        cat("*Keine signifikanten GO CC Terme für diesen Kontrast gefunden.*\n")
+      }
+    }
+  }
+}
+```
