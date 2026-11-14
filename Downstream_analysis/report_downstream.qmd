@@ -44,33 +44,40 @@ if (file.exists("../Metadata.txt")) {
 
 ---
 
-## 2. Peak Annotation & Genomische Verteilung pro Kontrast
+## 2. Peak Annotation & Genomische Verteilung pro Target & Kontrast
 
-Verteilung der **differentiellen** Peaks (signifikant veränderte Bindungsstellen) relativ zu genomischen Features für den jeweiligen Kontrast. Die Prozentwerte zeigen, welcher Anteil der veränderten Peaks in Promoter-Regionen, Introns, Exons oder intergenischen (Enhancer-)Bereichen liegt.
+Verteilung der **differentiellen** Peaks (signifikant veränderte Bindungsstellen) relativ zu genomischen Features.
 
 ```{r annotation-plots, results='asis'}
 anno_base <- "../results/annotation"
 
 if (dir.exists(anno_base)) {
-  contrast_dirs <- list.dirs(anno_base, recursive = FALSE)
+  target_dirs <- list.dirs(anno_base, recursive = FALSE)
   
-  if (length(contrast_dirs) > 0) {
-    for (d in contrast_dirs) {
-      contrast_name <- basename(d)
-      rds_path <- file.path(d, "peakAnno.rds")
+  if (length(target_dirs) > 0) {
+    for (t_dir in target_dirs) {
+      t_name <- basename(t_dir)
+      contrast_dirs <- list.dirs(t_dir, recursive = FALSE)
       
-      cat(sprintf("\n\n### Kontrast: %s\n\n", contrast_name))
-      
-      if (file.exists(rds_path)) {
-        peakAnno <- readRDS(rds_path)
-        print(plotAnnoBar(peakAnno) + labs(title = paste("Genomische Annotation —", contrast_name)))
-        cat("\n")
-      } else {
-        cat("*Keine Annotation-Datei für diesen Kontrast gefunden.*\n")
+      if (length(contrast_dirs) > 0) {
+        for (c_dir in contrast_dirs) {
+          contrast_name <- basename(c_dir)
+          rds_path <- file.path(c_dir, "peakAnno.rds")
+          
+          cat(sprintf("\n\n### Target: %s — Kontrast: %s\n\n", t_name, contrast_name))
+          
+          if (file.exists(rds_path)) {
+            peakAnno <- readRDS(rds_path)
+            print(plotAnnoBar(peakAnno) + labs(title = paste("Genomische Annotation —", t_name, "|", contrast_name)))
+            cat("\n")
+          } else {
+            cat("*Keine Annotation-Datei für diese Kombination gefunden.*\n")
+          }
+        }
       }
     }
   } else {
-    cat("Keine Unterordner in results/annotation gefunden.")
+    cat("Keine Target-Unterordner in results/annotation gefunden.")
   }
 } else {
   cat("Annotations-Verzeichnis nicht gefunden.")
