@@ -1,32 +1,52 @@
 name: chipseq_align
+
 channels:
   - conda-forge
   - bioconda
   - defaults
+
 dependencies:
-  - r-base=4.4
-  - r-tidyverse
-  - bioconductor-rtracklayer
-  - bioconductor-deseq2
-  - bioconductor-genomicalignments
-  - bioconductor-genomicranges
-  - bioconductor-rsamtools
-  - bioconductor-genomeinfodb
-  - bioconductor-biocparallel
-  - bioconductor-chipseeker
-  - bioconductor-org.dm.eg.db
-  - bioconductor-txdb.dmelanogaster.ucsc.dm6.ensGene
-  - bioconductor-go.db
-  - bioconductor-bsgenome.dmelanogaster.ucsc.dm6
+  # Python / Workflow
+  - python=3.11
+  - pandas
+  - snakemake
+
+  # Alignment & Processing
   - bowtie2
   - samtools
-  - macs2
   - deeptools
-  - py2bit
-  - pybigwig
-  - pysam
-  - snakemake
-  - meme
-  - r-gert
-  - r-usethis
-  - r-cmdfun
+
+  # Peak calling (macs3 für Python 3.11)
+  - macs3
+
+  # R environment (Stabiles R 4.4 für Bioconductor-Kompatibilität)
+  - r-base=4.4
+
+  # Bioconductor Kernpakete & erweiterte Abhängigkeiten
+  - bioconductor-diffbind
+  - bioconductor-genomicranges
+  - bioconductor-genomeinfodb
+  - bioconductor-rtracklayer
+  - bioconductor-rsamtools
+  - bioconductor-genomicalignments
+  - bioconductor-summarizedexperiment
+  - bioconductor-biocparallel
+  - bioconductor-sparsearray
+  - bioconductor-s4arrays
+
+  # R Statistik & Analyse
+  - bioconductor-deseq2
+  - bioconductor-edger
+
+  # R Plotting & Datenhandling
+  - r-ggplot2
+  - r-dplyr
+  - r-tidyr
+  - r-readr
+  - r-pheatmap
+  - r-data.table
+
+  # Utilities
+  - pigz
+  - gzip
+  - coreutils

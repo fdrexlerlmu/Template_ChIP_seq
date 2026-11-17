@@ -4,7 +4,7 @@ import os
 # 1. Konfiguration laden
 configfile: "config.yml"
 
-# 2. Metadaten einlesen & säubern (OHNE Index-Setzung, um flexibel nach Run_ID & Sample_ID zu filtern)
+# 2. Metadaten einlesen & säubern
 metadata_path = config.get("metadata", "Metadata.txt")
 metadata = pd.read_csv(metadata_path, sep="\t").dropna(how="all")
 metadata.columns = metadata.columns.str.strip()
@@ -29,29 +29,11 @@ for col in ["Run_ID", "Sample_ID", "Seq_Mode", "Sample_Type", "Input_Sample_ID",
 
 metadata["Seq_Mode"] = metadata["Seq_Mode"].str.upper()
 
-# Referenzgruppe aus der config.yml laden (Fallback: "Fed_4h")
-REF_GROUP = config.get("reference_condition", "Fed_4h")
-
-# Kombiniere Condition und Time für alle ChIP-Proben, um die Gruppen zu bestimmen
-metadata["Group"] = metadata["Condition"].astype(str) + "_" + metadata["Time"].astype(str)
 chip_meta = metadata[metadata["Sample_Type"].str.upper() == "CHIP"].copy()
-all_groups = chip_meta["Group"].unique().tolist()
 
-# Alle Testgruppen (außer der Referenz) und die daraus resultierenden Kontraste definieren
-TEST_GROUPS = [g for g in all_groups if g != REF_GROUP]
-CONTRASTS = [f"{g}_vs_{REF_GROUP}" for g in TEST_GROUPS]
-
-# Eindeutige Targets extrahieren (z.B. CrebA, Pol2)
-TARGETS = chip_meta["Target"].unique().tolist()
-print(f"[INFO] Gefundene Targets: {TARGETS}")
-
-# 1. Eindeutige Liste aller technischen Läufe (Run_IDs) für Rule 5a
+# Eindeutige Listen für Wildcards
 RUN_IDS = metadata["Run_ID"].unique().tolist()
-
-# 2. Eindeutige Liste aller biologischen Proben (Sample_IDs) für Rule 5b, Coverage, etc.
 SAMPLES = metadata["Sample_ID"].unique().tolist()
-
-# 3. Eindeutige Liste aller ChIP-Proben (biologisch) für Peak Calling & DiffBind
 CHIP_SAMPLES = chip_meta["Sample_ID"].unique().tolist()
 
 
@@ -112,19 +94,14 @@ rule all:
         expand("results/bigwig/{sample}.bw", sample=SAMPLES),
         expand("results/rds/{sample}_granges.rds", sample=SAMPLES),
         
-        # MACS2 Peaks pro ChIP-Probe
-        expand("results/peaks/narrowPeak/{sample}_peaks.narrowPeak", sample=CHIP_SAMPLES),
-        
-        # Differential Analysis Ausgaben (Getrennt nach Target und Kontrast)
-        expand("results/diffbind/{target}/differential_peaks_{contrast}.csv", target=TARGETS, contrast=CONTRASTS),
-        expand("results/diffbind/{target}/plots/pca_{target}.pdf", target=TARGETS),
-        expand("results/diffbind/{target}/plots/ma_plot_{contrast}.pdf", target=TARGETS, contrast=CONTRASTS)
+        # MACS3 Peaks pro ChIP-Probe
+        expand("results/peaks/narrowPeak/{sample}_peaks.narrowPeak", sample=CHIP_SAMPLES)
 
 
-# 5a. Einzelne Technische Replikate alignen (landen in results/bam/raw_tmp/)
+# 5a. Einzelne Technische Replikate alignen
 rule align_tech_replicate:
     input:
-        unpack(get_fastq_inputs)  # Nimmt wildcards.run_id
+        unpack(get_fastq_inputs)
     output:
         bam = temp("results/bam/raw_tmp/{run_id}.sorted.bam")
     params:
@@ -147,7 +124,7 @@ rule align_tech_replicate:
                 "samtools sort -@ 2 -m 1G -o {output.bam} -"
             )
 
-# 5b. Technische Replikate pro biologischer Sample_ID zusammenführen (landen in results/bam/)
+# 5b. Technische Replikate pro biologischer Sample_ID zusammenführen
 rule merge_tech_replicates:
     input:
         bams = lambda wildcards: [
@@ -164,7 +141,6 @@ rule merge_tech_replicates:
         if not input.bams:
             raise ValueError(f"Keine Matching Run_IDs für Sample '{wildcards.sample}' in Metadata.txt gefunden!")
 
-        # Falls nur 1 technisches Replikat existiert (_t1), direkt kopieren
         if len(input.bams) == 1:
             shell("cp {input.bams[0]} {output.bam}")
         else:
@@ -189,9 +165,8 @@ rule r_coverage_export:
     script:
         "scripts/calculate_coverage.R"
 
-
-# 7. MACS2 Peak Calling
-rule macs2_callpeak:
+# 7. MACS3 Peak Calling
+rule macs3_callpeak:
     input:
         treatment = "results/bam/{sample}.sorted.bam",
         control   = get_control_bam
@@ -205,12 +180,12 @@ rule macs2_callpeak:
         gsize = "dm",
         format_arg = lambda wildcards: "BAMPE" if metadata.loc[metadata["Sample_ID"] == wildcards.sample, "Seq_Mode"].values[0] == "PE" else "BAM"
     log:
-        "logs/macs2/{sample}.log"
+        "logs/macs3/{sample}.log"
     shell:
         """
         mkdir -p {params.tmp_outdir}
         
-        macs2 callpeak \
+        macs3 callpeak \
             -t {input.treatment} \
             -c {input.control} \
             -f {params.format_arg} \
@@ -226,21 +201,3 @@ rule macs2_callpeak:
         
         rm -rf {params.tmp_outdir}
         """
-
-# 8. Differential Peak Analysis per Target (Getrennt nach CrebA und Pol2)
-rule run_diffbind:
-    input:
-        meta  = metadata_path,
-        bams  = expand("results/bam/{sample}.sorted.bam", sample=CHIP_SAMPLES),
-        peaks = expand("results/peaks/narrowPeak/{sample}_peaks.narrowPeak", sample=CHIP_SAMPLES)
-    output:
-        csv = expand("results/diffbind/{target}/differential_peaks_{contrast}.csv", contrast=CONTRASTS, target="{target}"),
-        pca = "results/diffbind/{target}/plots/pca_{target}.pdf",
-        ma  = expand("results/diffbind/{target}/plots/ma_plot_{contrast}.pdf", contrast=CONTRASTS, target="{target}")
-    params:
-        ref_group = REF_GROUP,
-        target    = "{target}"
-    log:
-        "logs/diffbind/{target}_diffbind.log"
-    shell:
-        "Rscript --vanilla scripts/run_diffbind.R {input.meta} {output.pca} {params.ref_group} {params.target} > {log} 2>&1"

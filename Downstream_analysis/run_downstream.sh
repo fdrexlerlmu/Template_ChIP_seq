@@ -1,4 +1,3 @@
-
 #!/usr/bin/env bash
 set -uo pipefail
 
@@ -53,9 +52,9 @@ for csv in "${csv_files[@]}"; do
     ENRICH_DIR="${BASE_ENRICH_DIR}/${target}/${contrast}"
 
     echo "--------------------------------------------------------"
-    echo "[INFO] Target:   ${target}"
+    echo "[INFO] Target:      ${target}"
     echo "[INFO] Kontrast: ${contrast}"
-    echo "[INFO] CSV:      ${csv}"
+    echo "[INFO] CSV:       ${csv}"
     echo "--------------------------------------------------------"
 
     # -----------------------------------------------------
@@ -130,7 +129,7 @@ Rscript scripts/05_upset.R \
 
 # ---------------------------------------------------------
 # 4. Kinetische Profil-Clusteranalyse
-# ---------------------------------------------------------
+# --------------------------------------------------------
 
 echo "--------------------------------------------------------"
 echo "[6/7] Kinetische Profil-Clusteranalyse..."
@@ -142,7 +141,7 @@ Rscript scripts/06_kinetic_clustering.R \
 
 # ---------------------------------------------------------
 # 5. Quarto-Bericht
-# ---------------------------------------------------------
+# --------------------------------------------------------
 
 echo "--------------------------------------------------------"
 echo "[7/7] Rendere globalen Quarto HTML-Bericht..."
