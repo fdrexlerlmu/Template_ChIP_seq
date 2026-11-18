@@ -3,7 +3,6 @@ rawdata/
 results/
 logs/
 .snakemake/
-
 # R-Bibliothek & temporäre Files (wird über renv.lock wiederhergestellt)
 renv/library/
 renv/python/
@@ -11,7 +10,6 @@ renv/staging/
 .Rhistory
 .RData
 .RDataTmp
-
 # System- und Editor-Dateien
 .DS_Store
 *.Rproj.user
